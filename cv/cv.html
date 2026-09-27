@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>CV – Biel Vázquez Cárdenas</title>
+<meta name="author" content="Biel Vázquez Cárdenas">
+<link rel="stylesheet" href="fonts/local.css">
+<style>
+  :root {
+    --ink: #1c2230;
+    --muted: #5a6273;
+    --accent: #1f4e79;
+    --rule: #d5dae3;
+  }
+  /* Multi-page rules: page 1 carries the full header; any following page
+     repeats the name and shows "Página X de Y" in the margins. */
+  @page {
+    size: A4;
+    margin: 14mm 17mm 13mm 17mm;
+    @top-left { content: "Biel Vázquez Cárdenas · CV"; font: 500 7.5pt Inter, sans-serif; color: #5a6273; }
+    @bottom-right { content: "Página " counter(page) " de " counter(pages); font: 400 7.5pt Inter, sans-serif; color: #5a6273; }
+  }
+  @page :first {
+    @top-left { content: none; }
+    @bottom-right { content: none; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #fff; }
+  body {
+    font-family: Inter, "Liberation Sans", Arial, sans-serif;
+    font-size: 9.6pt;
+    line-height: 1.45;
+    color: var(--ink);
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  a { color: inherit; text-decoration: none; }
+
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 8mm;
+    padding-bottom: 4.5mm;
+    border-bottom: 1.6pt solid var(--accent);
+  }
+  h1 {
+    font-family: "Source Serif 4", Georgia, serif;
+    font-weight: 600;
+    font-size: 25pt;
+    line-height: 1.1;
+    margin: 1mm 0 1.8mm;
+    letter-spacing: -0.2pt;
+  }
+  .headline {
+    font-size: 10.6pt;
+    font-weight: 600;
+    color: var(--accent);
+    margin: 0 0 3mm;
+    line-height: 1.35;
+  }
+  .contact {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: max-content max-content;
+    gap: 1.2mm 8mm;
+    font-size: 9.2pt;
+    color: var(--ink);
+    justify-content: start;
+  }
+  .contact span { color: var(--muted); font-weight: 500; margin-right: 1.5mm; }
+  .photo {
+    width: 29mm;
+    height: 38.6mm;
+    object-fit: cover;
+    border-radius: 2mm;
+    flex: none;
+  }
+
+  section { margin-top: 4.2mm; }
+  h2 {
+    font-size: 9.2pt;
+    font-weight: 700;
+    letter-spacing: 1.1pt;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 2mm;
+    padding-bottom: 1mm;
+    border-bottom: 0.6pt solid var(--rule);
+    break-after: avoid;
+  }
+  p { margin: 0; }
+  .summary { text-align: left; }
+  .avail { margin-top: 1.8mm; }
+  .avail b { font-weight: 600; }
+
+  .item { break-inside: avoid; }
+  .item + .item { margin-top: 3mm; }
+  .row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 4mm;
+  }
+  .role { font-weight: 600; font-size: 10pt; }
+  .date { color: var(--muted); font-size: 9pt; white-space: nowrap; font-weight: 500; }
+  .org { color: var(--muted); }
+  ul { margin: 1.2mm 0 0; padding-left: 4.2mm; }
+  li { margin: 0.6mm 0; padding-left: 0.6mm; }
+  li::marker { color: var(--accent); }
+
+  .skills { display: grid; grid-template-columns: 27mm 1fr; gap: 0.6mm 3mm; }
+  .skills dt { font-weight: 600; }
+  .skills dd { margin: 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Biel Vázquez Cárdenas</h1>
+    <p class="headline">Técnico en Sistemas Microinformáticos y Redes<br>Estudiante de CFGS en Sistemas de Telecomunicaciones e Informáticos</p>
+    <ul class="contact">
+      <li><span>Tel.</span><a href="tel:+34680886558">680 886 558</a></li>
+      <li><span>Email</span><a href="mailto:bielvazquezcardenas@gmail.com">bielvazquezcardenas@gmail.com</a></li>
+      <li><span>Ubicación</span>Les Franqueses del Vallès (Barcelona)</li>
+      <li><span>Edad</span>18 años</li>
+    </ul>
+  </div>
+  <img class="photo" src="photo.jpg" alt="Fotografía de Biel Vázquez Cárdenas">
+</header>
+
+<section>
+  <h2>Perfil</h2>
+  <p class="summary">Técnico en Sistemas Microinformáticos y Redes con experiencia práctica en la administración y el despliegue de la red de un festival internacional de gran formato (Primavera Sound 2026) y en soporte IT a usuarios en un centro educativo. Actualmente curso el CFGS de Sistemas de Telecomunicaciones e Informáticos en l’Escola del Treball (Barcelona). Busco un puesto de tarde, compatible con los estudios, en soporte informático, redes o atención al cliente.</p>
+  <p class="avail"><b>Disponibilidad:</b> de lunes a domingo; entre semana, a partir de las 14:00.</p>
+</section>
+
+<section>
+  <h2>Experiencia</h2>
+
+  <div class="item">
+    <div class="row">
+      <div><span class="role">Administrador e instalador de redes</span> · <span class="org">Primavera Sound, Barcelona</span></div>
+      <div class="date">may. – jun. 2026</div>
+    </div>
+    <ul>
+      <li>Administré la red del festival durante el montaje y los días de evento.</li>
+      <li>Instalé y desplegué infraestructura de red en el recinto.</li>
+      <li>Resolví incidencias técnicas de todas las áreas del equipo como soporte polivalente.</li>
+    </ul>
+  </div>
+
+  <div class="item">
+    <div class="row">
+      <div><span class="role">Técnico de sistemas en prácticas (FP, 512 h)</span> · <span class="org">Institut El Til·ler, Les Franqueses del Vallès</span></div>
+      <div class="date">2026</div>
+    </div>
+    <ul>
+      <li>Administré la red del centro.</li>
+      <li>Di soporte IT a profesorado y personal: incidencias de hardware, software y cuentas de usuario.</li>
+    </ul>
+  </div>
+
+  <div class="item">
+    <div class="row">
+      <div><span class="role">Beta tester de hardware</span> · <span class="org">Programa beta de Roku (en remoto)</span></div>
+    </div>
+    <ul>
+      <li>Probé dispositivos en entorno doméstico y reporté incidencias al fabricante.</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2>Formación</h2>
+  <div class="item">
+    <div class="row">
+      <div><span class="role">CFGS Sistemas de Telecomunicaciones e Informáticos</span></div>
+      <div class="date">2026 – actualidad</div>
+    </div>
+    <div class="org">Institut Escola del Treball, Barcelona</div>
+  </div>
+  <div class="item">
+    <div class="row">
+      <div><span class="role">CFGM Sistemas Microinformáticos y Redes (SMX)</span></div>
+      <div class="date">2024 – 2026</div>
+    </div>
+    <div class="org">Institut Carles Vallbona, Granollers</div>
+  </div>
+</section>
+
+<section>
+  <h2>Competencias técnicas</h2>
+  <dl class="skills">
+    <dt>Redes</dt><dd>LAN y Wi-Fi; instalación y cableado; configuración de equipos de red.</dd>
+    <dt>Sistemas</dt><dd>Windows y Linux; montaje, reparación y mantenimiento de hardware.</dd>
+    <dt>Electrónica</dt><dd>Montaje y prototipado básico.</dd>
+    <dt>Web</dt><dd>HTML y CSS.</dd>
+  </dl>
+</section>
+
+<section>
+  <h2>Idiomas</h2>
+  <dl class="skills">
+    <dt>Catalán</dt><dd>Nativo</dd>
+    <dt>Castellano</dt><dd>Nativo</dd>
+    <dt>Inglés</dt><dd>Nivel B2–C1 (sin certificación oficial): fluido en conversación, lectura y escritura.</dd>
+  </dl>
+</section>
+
+<section>
+  <h2>Intereses</h2>
+  <p>Linux y software libre · Electrónica y montaje de hardware · Redes y conectividad (routers 4G/LTE y antenas externas).</p>
+</section>
+
+</body>
+</html>
