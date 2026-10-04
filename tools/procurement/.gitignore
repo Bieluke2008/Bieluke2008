@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+.ruff_cache/
+.hyperresearch/
+.opencode/
+research/
+.venv/

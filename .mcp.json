@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "procurement": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--directory", "tools/procurement", "python", "server.py"],
+      "env": {
+        "TMAPI_TOKEN": "${TMAPI_TOKEN}"
+      }
+    }
+  }
+}
