@@ -1181,6 +1181,82 @@ static JSValue js_update_borders(JSContext *ctx, JSValueConst this_val, int argc
     return JS_UNDEFINED;
 }
 
+/**
+ * SpatialQuery.bfsNearest() with closestShore's predicate (land shore owned
+ * by ownerSmallID) tested in C; `extra`, when a function, is the rest of the
+ * predicate and runs on the tiles that pass, in the same order as in JS.
+ * shoreNearest(from, maxDist, ownerSmallID, visited, gen, extra) -> tile | null
+ */
+static JSValue js_shore_nearest(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 6 || nmaps == 0) return JS_ThrowTypeError(ctx, "shoreNearest: bad arguments");
+    const NMap *m = &maps[0];
+    int64_t from = iarg(ctx, argv[0]);
+    double max_dist = darg(ctx, argv[1]);
+    unsigned owner = (unsigned)iarg(ctx, argv[2]);
+    size_t vbytes = 0;
+    uint32_t *visited = typed_ptr(ctx, argv[3], &vbytes);
+    if (!visited) return JS_ThrowTypeError(ctx, "shoreNearest: Uint32Array expected");
+    int64_t vlen = (int64_t)(vbytes / 4);
+    uint32_t gen = (uint32_t)iarg(ctx, argv[4]);
+    bool has_extra = JS_IsFunction(ctx, argv[5]);
+    if (from < 0 || from >= m->size || from >= vlen) return JS_NULL;
+    int64_t w = m->w, fx = xof(m, from), fy = yof(m, from);
+    int64_t best = -1;
+    double best_dist = INFINITY;
+    int64_t *stack = NULL, scap = 0, sp = 0;
+    JSValue ret = JS_UNDEFINED;
+#define DIST(t) ((double)(llabs(xof(m, t) - fx) + llabs(yof(m, t) - fy)))
+#define MARK(t)                                                                                       \
+    do {                                                                                              \
+        int64_t t_ = (t);                                                                             \
+        visited[t_] = gen;                                                                            \
+        if (sp == scap) {                                                                             \
+            scap = scap ? scap * 2 : 1024;                                                            \
+            stack = realloc(stack, sizeof(int64_t) * (size_t)scap);                                   \
+        }                                                                                             \
+        stack[sp++] = t_;                                                                             \
+        unsigned tb_ = T(m, t_);                                                                      \
+        if ((tb_ & 0x80) && (tb_ & 0x40) && owner_id(m, t_) == owner) {                               \
+            bool ok_ = true;                                                                          \
+            if (has_extra) {                                                                          \
+                JSValue a_ = num(t_);                                                                 \
+                JSValue r_ = JS_Call(ctx, argv[5], JS_UNDEFINED, 1, &a_);                             \
+                if (JS_IsException(r_)) {                                                             \
+                    ret = r_;                                                                         \
+                    goto out;                                                                         \
+                }                                                                                     \
+                ok_ = JS_ToBool(ctx, r_);                                                             \
+                JS_FreeValue(ctx, r_);                                                                \
+            }                                                                                         \
+            if (ok_) {                                                                                \
+                double d_ = DIST(t_);                                                                 \
+                if (d_ < best_dist) best = t_, best_dist = d_;                                        \
+            }                                                                                         \
+        }                                                                                             \
+    } while (0)
+    if (max_dist >= 0) MARK(from);
+    while (sp > 0) {
+        int64_t cur = stack[--sp], x = xof(m, cur), nb[4];
+        int n = 0;
+        if (cur >= w) nb[n++] = cur - w;
+        if (cur < (m->h - 1) * w) nb[n++] = cur + w;
+        if (x != 0) nb[n++] = cur - 1;
+        if (x != w - 1) nb[n++] = cur + 1;
+        for (int i = 0; i < n; i++) {
+            int64_t t = nb[i];
+            if (t >= vlen) continue;
+            if (visited[t] != gen && DIST(t) <= max_dist) MARK(t);
+        }
+    }
+#undef MARK
+#undef DIST
+out:
+    free(stack);
+    if (JS_IsException(ret)) return ret;
+    return best < 0 ? JS_NULL : num(best);
+}
+
 // --- Install ----------------------------------------------------------------------------
 
 static JSValue make_class(JSContext *ctx, JSClassID *id, const char *name, JSClassFinalizer *fin, JSClassGCMark *mark,
@@ -1211,6 +1287,7 @@ void native_install(JSContext *ctx) {
     JS_SetPropertyStr(ctx, n, "clusters", JS_NewCFunction(ctx, js_clusters, "clusters", 4));
     JS_SetPropertyStr(ctx, n, "nameRect", JS_NewCFunction(ctx, js_name_rect, "nameRect", 6));
     JS_SetPropertyStr(ctx, n, "nextConquerTile", JS_NewCFunction(ctx, js_next_conquer_tile, "nextConquerTile", 4));
+    JS_SetPropertyStr(ctx, n, "shoreNearest", JS_NewCFunction(ctx, js_shore_nearest, "shoreNearest", 6));
     JS_SetPropertyStr(ctx, n, "updateBorders", JS_NewCFunction(ctx, js_update_borders, "updateBorders", 2));
     static const char *snames[4] = {"s0", "s1", "s2", "s3"};
     for (int i = 0; i < 4; i++) atom_s[i] = JS_NewAtom(ctx, snames[i]);

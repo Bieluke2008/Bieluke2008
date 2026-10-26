@@ -4,6 +4,8 @@
 import { AttackExecution } from "@openfront/engine/execution/AttackExecution";
 import { PlayerExecution } from "@openfront/engine/execution/PlayerExecution";
 import { GameImpl } from "@openfront/engine/game/GameImpl";
+import { bumpTraversalGeneration, tileTraversalScratch } from "@openfront/engine/game/TileTraversalScratch";
+import { SpatialQuery } from "@openfront/engine/pathfinding/spatial/SpatialQuery";
 
 // AttackExecution.ts's module constant (not exported).
 const malusForRetreat = 25;
@@ -95,6 +97,46 @@ export function installKernels(): boolean {
 
   (GameImpl.prototype as any).updateBorders = function (this: any, tile: number) {
     native.updateBorders(tile, this._playersBySmallID);
+  };
+
+  // closestShore / closestReachableShore: bfsNearest's walk in C
+  // (shoreNearest); the water-component half of the predicate stays here.
+  const spatial = SpatialQuery.prototype as any;
+  const shoreNearest = (game: any, from: number, maxDist: number, ownerId: number, extra: any) => {
+    if (!game.map().isValidRef(from)) return null;
+    const scratch = tileTraversalScratch(game);
+    const gen = bumpTraversalGeneration(scratch);
+    return native.shoreNearest(from, maxDist, ownerId, scratch.visited, gen, extra);
+  };
+  spatial.closestShore = function (this: any, owner: any, tile: number, maxDist: number = 50) {
+    return shoreNearest(this.game, tile, maxDist, owner.smallID(), null);
+  };
+  spatial.closestReachableShore = function (
+    this: any,
+    targetOwner: any,
+    attacker: any,
+    tile: number,
+    maxDist: number = 50,
+  ) {
+    const gm = this.game;
+    const targetId = targetOwner.smallID();
+    const reachable = this.reachableComponents(attacker);
+    if (reachable.size === 0) return null;
+    const reachableComponent = (t: number) => {
+      const component = gm.getWaterComponent(t);
+      return component !== null && reachable.has(component);
+    };
+    if (
+      maxDist >= 0 &&
+      gm.map().isValidRef(tile) &&
+      gm.isShore(tile) &&
+      gm.isLand(tile) &&
+      gm.ownerID(tile) === targetId &&
+      reachableComponent(tile)
+    ) {
+      return tile;
+    }
+    return shoreNearest(gm, tile, maxDist, targetId, reachableComponent);
   };
 
   const player = PlayerExecution.prototype as any;

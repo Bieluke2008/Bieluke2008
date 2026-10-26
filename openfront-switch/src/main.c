@@ -13,6 +13,7 @@
 #endif
 
 #include "app.h"
+#include "clocks.h"
 #include "engine.h"
 #include "gfx.h"
 #include "hud.h"
@@ -742,7 +743,7 @@ int main(int argc, char **argv) {
 #ifdef __SWITCH__
     romfsInit();
     plInitialize(PlServiceType_User);
-    appletSetCpuBoostMode(ApmCpuBoostMode_FastLoad);  // 1785 MHz for the JS engine
+    clocks_boost();
     G.romfs = "romfs:/";
     int win_w = 1920, win_h = 1080;
 #else
@@ -809,6 +810,7 @@ int main(int argc, char **argv) {
     G.last_frame = SDL_GetTicks();
     for (int frame = 0; !G.quit; frame++) {
         gfx_begin_frame();
+        if (frame % 120 == 0) clocks_poll();
         int out_w, out_h;
         SDL_GetRendererOutputSize(G.ren, &out_w, &out_h);
         input_poll(&G.in, out_w, out_h);
@@ -857,7 +859,7 @@ int main(int argc, char **argv) {
     SDL_DestroyWindow(win);
     SDL_Quit();
 #ifdef __SWITCH__
-    appletSetCpuBoostMode(ApmCpuBoostMode_Normal);
+    clocks_restore();
     plExit();
     romfsExit();
 #endif
