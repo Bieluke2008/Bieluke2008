@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "clocks.h"
 #include "native.h"
 
 #include <SDL.h>
@@ -691,6 +692,7 @@ static bool load_engine(void) {
 
 static int engine_main(void *unused) {
     (void)unused;
+    clocks_own_core();
     init_ok = load_engine();
     SDL_SemPost(ready_sem);
     if (!init_ok) return 1;

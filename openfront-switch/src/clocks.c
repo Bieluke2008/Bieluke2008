@@ -61,8 +61,26 @@ void clocks_restore(void) {
     if (use_applet) appletSetCpuBoostMode(ApmCpuBoostMode_Normal), use_applet = false;
 }
 
+/**
+ * Horizon pins a new thread to the process's default core, the one the
+ * render thread runs on, and never migrates it: give the calling thread
+ * another core of the process's mask.
+ */
+void clocks_own_core(void) {
+    u64 mask = 0;
+    if (R_FAILED(svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0))) return;
+    int cur = svcGetCurrentProcessorNumber();
+    for (int core = 0; core < 64; core++) {
+        if (core != cur && (mask >> core & 1)) {
+            svcSetThreadCoreMask(CUR_THREAD_HANDLE, core, 1u << core);
+            return;
+        }
+    }
+}
+
 #else
 
+void clocks_own_core(void) {}
 void clocks_boost(void) {}
 void clocks_poll(void) {}
 void clocks_restore(void) {}
