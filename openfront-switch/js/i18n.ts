@@ -102,6 +102,9 @@ const PORT_STRINGS: Record<string, Record<string, string>> = {
     quit: "Quit",
     loading: "Loading map…",
     default: "Map default",
+    continents: "World and continents",
+    real_maps: "Real places",
+    fictional_maps: "Fictional maps",
     credits: "OpenFront™ and Contributors · AGPL-3.0 · assets CC BY-SA 4.0",
     controls_title: "Controls",
     controls: [
@@ -127,6 +130,9 @@ const PORT_STRINGS: Record<string, Record<string, string>> = {
     quit: "Salir",
     loading: "Cargando mapa…",
     default: "Por defecto",
+    continents: "Mundo y continentes",
+    real_maps: "Lugares reales",
+    fictional_maps: "Mapas ficticios",
     credits: "OpenFront™ y colaboradores · AGPL-3.0 · recursos CC BY-SA 4.0",
     controls_title: "Controles",
     controls: [

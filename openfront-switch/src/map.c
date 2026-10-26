@@ -713,6 +713,116 @@ static void draw_structures(const Snapshot *s, const Camera *cam) {
     }
 }
 
+// BarPass: progress bars below structures (construction, deletion countdown,
+// missile reload), in map tiles so they scale with the zoom.
+static void draw_bars(const Snapshot *s, const Camera *cam) {
+    const float bar_w = 14, bar_h = 3, offset_y = 6, border = 1;
+    for (int i = 0; i < s->nunits; i++) {
+        const UnitRec *u = &s->units[i];
+        if (u->kind < 0 || u->kind >= STRUCT_KINDS || u->progress < 0) continue;
+        float x, y;
+        cam_tile_to_page(cam, u->x + 0.5f - bar_w / 2, u->y + 0.5f + offset_y, &x, &y);
+        float w = bar_w * cam->zoom, h = bar_h * cam->zoom, b = border * cam->zoom;
+        if (x > PAGE_W || y > PAGE_H || x + w < 0 || y + h < 0) continue;
+        float p = (float)u->progress / 1000;
+        SDL_Color c = p < 0.25f ? rgba(232, 25, 25, 255)
+                      : p < 0.5f ? rgba(240, 122, 25, 255)
+                      : p < 0.75f ? rgba(202, 231, 15, 255)
+                                  : rgba(44, 239, 18, 255);
+        gfx_fill_rect((Rect){x, y, w, h}, rgba(0, 0, 0, 255));
+        gfx_fill_rect((Rect){x + b, y + b, p * (w - 2 * b), h - 2 * b}, c);
+    }
+}
+
+// --- Attack troop labels ----------------------------------------------------------------------
+
+// AttackingTroopsController + WorldTextPass: each attack's troops at its
+// front (one label per front segment, at most two), easing over 250 ms to
+// new positions, at a fixed on-screen size.
+typedef struct {
+    int key, n;
+    float sx[2], sy[2], dx[2], dy[2];  // animation source and target, tiles
+    Uint32 start;
+} AttackSlot;
+
+static AttackSlot attack_slots[MAX_ATTACK_LABELS];
+static int nattack_slots;
+
+static void slot_pos(const AttackSlot *sl, int i, Uint32 now, float *x, float *y) {
+    float t = fminf(1, (float)(now - sl->start) / 250.0f);
+    *x = sl->sx[i] + (sl->dx[i] - sl->sx[i]) * t;
+    *y = sl->sy[i] + (sl->dy[i] - sl->sy[i]) * t;
+}
+
+static void reconcile_slot(AttackSlot *sl, const AttackLabel *a, Uint32 now) {
+    float nx[2] = {a->x[0], a->x[1]}, ny[2] = {a->y[0], a->y[1]};
+    int n = a->npos;
+    bool same = n == sl->n;
+    for (int i = 0; same && i < n; i++) same = nx[i] == sl->dx[i] && ny[i] == sl->dy[i];
+    if (same) return;
+    // alignClusterOrder: keep each label on its own front.
+    if (n == 2 && sl->n == 2) {
+        float direct = fabsf(nx[0] - sl->dx[0]) + fabsf(ny[0] - sl->dy[0]) + fabsf(nx[1] - sl->dx[1]) +
+                       fabsf(ny[1] - sl->dy[1]);
+        float swapped = fabsf(nx[1] - sl->dx[0]) + fabsf(ny[1] - sl->dy[0]) + fabsf(nx[0] - sl->dx[1]) +
+                        fabsf(ny[0] - sl->dy[1]);
+        if (swapped < direct) {
+            float tx = nx[0], ty = ny[0];
+            nx[0] = nx[1], ny[0] = ny[1], nx[1] = tx, ny[1] = ty;
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        float cx = nx[i], cy = ny[i];
+        if (i < sl->n) {
+            slot_pos(sl, i, now, &cx, &cy);
+            if (hypotf(nx[i] - cx, ny[i] - cy) > 200) cx = nx[i], cy = ny[i];
+        }
+        sl->sx[i] = cx, sl->sy[i] = cy;
+        sl->dx[i] = nx[i], sl->dy[i] = ny[i];
+    }
+    sl->n = n;
+    sl->start = now;
+}
+
+static void draw_attack_labels(const Snapshot *s, const Camera *cam) {
+    Uint32 now = SDL_GetTicks();
+    AttackSlot next[MAX_ATTACK_LABELS];
+    int nnext = 0;
+    for (int i = 0; i < s->nattacks && nnext < MAX_ATTACK_LABELS; i++) {
+        const AttackLabel *a = &s->attacks[i];
+        AttackSlot *sl = &next[nnext++];
+        int found = -1;
+        for (int k = 0; k < nattack_slots; k++) {
+            if (attack_slots[k].key == a->key) found = k;
+        }
+        if (found >= 0) {
+            *sl = attack_slots[found];
+        } else {
+            *sl = (AttackSlot){.key = a->key};
+        }
+        reconcile_slot(sl, a, now);
+    }
+    memcpy(attack_slots, next, sizeof(AttackSlot) * (size_t)nnext);
+    nattack_slots = nnext;
+    if (alt_view) return;
+    for (int i = 0; i < s->nattacks && i < nattack_slots; i++) {
+        const AttackLabel *a = &s->attacks[i];
+        const AttackSlot *sl = &attack_slots[i];
+        char text[32];
+        format_troops(a->troops, text, sizeof text);
+        SDL_Color c = a->incoming ? rgba(0xf8, 0x71, 0x71, 255) : rgba(0x3f, 0xa9, 0xf5, 255);
+        for (int k = 0; k < sl->n; k++) {
+            float tx, ty, x, y;
+            slot_pos(sl, k, now, &tx, &ty);
+            cam_tile_to_page(cam, tx + 0.5f, ty + 0.5f, &x, &y);
+            if (x < -60 || y < -30 || x > PAGE_W + 60 || y > PAGE_H + 30) continue;
+            const float size = 17;
+            gfx_text_baseline(FONT_MAP, size, text, x, y + 0.35f * size, c, rgba(0, 0, 0, 230), 1.2f,
+                              ALIGN_CENTER);
+        }
+    }
+}
+
 // --- Units -----------------------------------------------------------------------------------
 
 // UnitPass atlas columns, by our unit kind.
@@ -1039,9 +1149,11 @@ void map_draw(const Snapshot *s, const Camera *cam, const MapOverlay *ov) {
     draw_units(s, cam, false);
     draw_structures(s, cam);
     draw_units(s, cam, true);
+    draw_bars(s, cam);
     draw_telegraphs(s, cam, ov->my_sid);
     draw_selection(s, cam, ov);
     draw_names(s, cam);
+    draw_attack_labels(s, cam);
     draw_ghost(ov, cam);
 }
 

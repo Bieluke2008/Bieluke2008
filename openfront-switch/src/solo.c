@@ -94,6 +94,47 @@ static void section_title(const char *text, float x, float y) {
     gfx_fill_rect((Rect){x, y + 41, 706, 1}, hex(CARD_BORDER));
 }
 
+// The map grid: section headings (world and continents, real, fictional)
+// and, inside them, group headings like the web picker's category bars.
+#define SECTION_H 40.0f
+#define GROUP_H 30.0f
+
+/** Places map i's card at (rx[i], ry[i]) below the grid top; returns the grid height. */
+static float layout_maps(const MapList *ml, int cols, float cw, float ch, float *rx, float *ry) {
+    float y = 0;
+    int col = 0;
+    for (int i = 0; i < ml->nmaps; i++) {
+        bool sec = ml->map_sections[i][0], grp = ml->map_groups[i][0];
+        if ((sec || grp) && col != 0) y += ch + 16, col = 0;
+        if (sec) y += SECTION_H;
+        if (grp) y += GROUP_H;
+        rx[i] = (cw + 16) * (float)col;
+        ry[i] = y;
+        if (++col == cols) col = 0, y += ch + 16;
+    }
+    if (col != 0) y += ch + 16;
+    return y;
+}
+
+static void map_headings(const MapList *ml, int i, float x, float card_y) {
+    float y = card_y;
+    if (ml->map_groups[i][0]) {
+        y -= GROUP_H;
+        char t[96];
+        snprintf(t, sizeof t, "%s", ml->map_groups[i]);
+        upper(t);
+        gfx_text(FONT_700, 12, t, x + 8, y + 4, 18, alpha(hex(TW_WHITE), 0.4f), ALIGN_LEFT);
+    }
+    if (ml->map_sections[i][0]) {
+        y -= SECTION_H;
+        char t[96];
+        snprintf(t, sizeof t, "%s", ml->map_sections[i]);
+        upper(t);
+        gfx_fill_rrect((Rect){x, y + 8, 4, 18}, 2, hex(ORANGE));
+        gfx_text(FONT_700, 15, t, x + 14, y + 6, 22, hex(TW_WHITE), ALIGN_LEFT);
+    }
+}
+
 /** A toggle tile: on = dark red with an orange edge, off = muted purple. */
 static bool toggle(int idx, Rect r, const char *label, bool on, bool locked) {
     uint32_t id = ui_id("solo-toggle", idx);
@@ -167,8 +208,14 @@ SoloResult solo_draw(StartOptions *o, int *speed_idx, const Input *in) {
     const float x0 = 287, w = 706;
     const int cols = 4;
     const float cw = (w - 16 * (cols - 1)) / cols, ch = 132;
-    int rows = (ml->nmaps + cols - 1) / cols;
-    float maps_h = (float)rows * (ch + 16);
+    static float *rx, *ry;
+    static int nlaid;
+    if (nlaid != ml->nmaps) {
+        rx = realloc(rx, sizeof(float) * (size_t)(ml->nmaps + 1));
+        ry = realloc(ry, sizeof(float) * (size_t)(ml->nmaps + 1));
+        nlaid = ml->nmaps;
+    }
+    float maps_h = layout_maps(ml, cols, cw, ch, rx, ry);
     float content = 16 + 42 + 16 + maps_h + 16 + 42 + 16 + 70 + 24 + 42 + 16 + 90 + 16 + 64 + 16 + 64 + 24;
     float max_scroll = fmaxf(0, content - view.h);
     const Pointer *p = ui_pointer();
@@ -191,8 +238,10 @@ SoloResult solo_draw(StartOptions *o, int *speed_idx, const Input *in) {
     y += 42 + 16;
     int loads = 0;
     for (int i = 0; i < ml->nmaps; i++) {
-        Rect r = {x0 + (cw + 16) * (float)(i % cols), y + (ch + 16) * (float)(i / cols), cw, ch};
-        if (r.y + r.h < view.y || r.y > view.y + view.h) continue;
+        Rect r = {x0 + rx[i], y + ry[i], cw, ch};
+        if (r.y + r.h < view.y || r.y - SECTION_H - GROUP_H > view.y + view.h) continue;
+        map_headings(ml, i, x0, r.y);
+        if (r.y > view.y + view.h) continue;
         bool sel = o->map == i;
         uint32_t id = ui_id("solo-map", i);
         bool hover = ui_hover(id, r) && in_view;
@@ -300,7 +349,7 @@ SoloResult solo_draw(StartOptions *o, int *speed_idx, const Input *in) {
     if (in->pressed[BTN_PLUS]) result = SOLO_START;
     if (ml->nmaps && (in->pressed[BTN_L] || in->pressed[BTN_R])) {
         o->map = (o->map + (in->pressed[BTN_R] ? 1 : ml->nmaps - 1)) % ml->nmaps;
-        float target = 16 + 42 + 16 + (float)(o->map / cols) * (ch + 16);
+        float target = 16 + 42 + 16 + ry[o->map];
         if (target < scroll || target + ch > scroll + view.h) scroll = target - 16;
     }
     return result;

@@ -48,6 +48,7 @@ enum {
 
 typedef struct {
     int kind, x, y, owner, level, flags, id, tx, ty;
+    int progress;  // structure bar (BarPass) in per mille, -1 for none
 } UnitRec;
 
 enum {
@@ -58,6 +59,17 @@ enum {
     UNIT_SILO_COOLDOWN = 32,
     UNIT_TRADE_SELF = 64,
 };
+
+/** An attack's troop label (AttackingTroopsController): up to two front positions. */
+typedef struct {
+    int key;  // stable per attack while it lasts
+    bool incoming;
+    double troops;
+    int npos;
+    float x[2], y[2];  // tiles
+} AttackLabel;
+
+#define MAX_ATTACK_LABELS 64
 
 typedef struct {
     char name[NAME_LEN];
@@ -79,6 +91,8 @@ typedef struct {
     Label *labels;
     int nunits;
     UnitRec *units;
+    int nattacks;
+    AttackLabel attacks[MAX_ATTACK_LABELS];
     char *frame;             // the adapter's HUD model (JSON), may be NULL
     int frame_version;
     uint8_t *relations;      // MAX_REL x MAX_REL: 1 friendly, 2 embargo
@@ -91,6 +105,8 @@ typedef struct {
     int nmaps;
     char (*map_names)[NAME_LEN];
     char (*map_folders)[NAME_LEN];
+    char (*map_sections)[NAME_LEN];  // picker section heading map i opens, "" if none
+    char (*map_groups)[NAME_LEN];    // group heading within it, "" if none
 } MapList;
 
 /**

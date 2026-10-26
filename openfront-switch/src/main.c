@@ -611,7 +611,8 @@ static void default_name(char *out, size_t n) {
 // --autoplay MAP --frames N --screenshot FILE [--scene NAME]
 // plays the map (spawns, attacks around), and before the screenshot opens
 // the scene to check: radial, build, hover, panel, emoji, settings, exit,
-// send, chat, ghost, help.
+// send, chat, ghost, help, front (attack troop labels), bars (structure
+// progress bars).
 
 static struct {
     const char *map;
@@ -686,6 +687,17 @@ static void autoplay(int frame) {
         if (frame == scene_at - 30 && find_label(app.my_sid, &mx, &my)) {
             app.cam.cx = mx, app.cam.cy = my, app.cam.zoom = 4;
         }
+        // These follow what they show until the screenshot.
+        if (!strcmp(test.scene, "front") && G.snap.nattacks > 0) {
+            app.cam.cx = G.snap.attacks[0].x[0], app.cam.cy = G.snap.attacks[0].y[0], app.cam.zoom = 3;
+        } else if (!strcmp(test.scene, "bars")) {
+            for (int i = 0; i < G.snap.nunits; i++) {
+                if (G.snap.units[i].progress >= 0) {
+                    app.cam.cx = G.snap.units[i].x, app.cam.cy = G.snap.units[i].y, app.cam.zoom = 6;
+                    break;
+                }
+            }
+        }
         if (frame != scene_at) return;
         const char *s = test.scene;
         int enemy = nearest_enemy(&ex, &ey);
@@ -706,6 +718,7 @@ static void autoplay(int frame) {
         else if (!strcmp(s, "settings")) app_open_modal(MODAL_SETTINGS, -1);
         else if (!strcmp(s, "exit")) app_open_modal(MODAL_EXIT, -1);
         else if (!strcmp(s, "help")) app.help_visible = true;
+
         else if (!strcmp(s, "send") && enemy) {
             app.send_troops = true;
             app_open_modal(MODAL_SEND, enemy);

@@ -13,6 +13,7 @@ import {
   GameMode,
   GameType,
   maps,
+  PlayerType,
   UnitType,
 } from "@openfront/engine-api/game/GameTypes";
 import { ErrorUpdate, GameUpdateViewData } from "@openfront/engine-api/game/GameUpdates";
@@ -20,6 +21,7 @@ import { MapManifest } from "@openfront/engine-api/game/MapFiles";
 import { flattenedEmojiTable, GameStartInfo, StampedIntent } from "@openfront/engine-api/Schemas";
 import { renderTroops } from "@openfront/engine-lib/Format";
 import { createGameRunner } from "@openfront/engine/GameRunner";
+import type { Unit } from "@openfront/engine/game/Game";
 import { ghost, placeGhost } from "./build";
 import { bindNativeMaps } from "./native/maps";
 import { colorNewPlayers, colorTable, resetColors } from "./colors";
@@ -42,7 +44,28 @@ interface MapEntry {
   folder: string;
   type: GameMapType;
   name: string;
+  /** Heading of the picker section and of the group within it the map opens, else "". */
+  section: string;
+  group: string;
 }
+
+// The picker's order: the world and continent maps first (in this order),
+// then real places by region, then the made-up ones; the group titles are
+// the web client's map_categories.
+const CONTINENTS = [
+  "World",
+  "GiantWorldMap",
+  "Europe",
+  "EuropeClassic",
+  "Africa",
+  "NorthAmerica",
+  "SouthAmerica",
+  "Asia",
+  "Oceania",
+  "Antarctica",
+];
+const REAL_GROUPS = ["europe", "asia", "north_america", "africa", "south_america", "oceania", "antarctica", "countries"];
+const FICTIONAL_GROUPS = ["fictional", "cosmic", "arcade", "tournament"];
 
 let mapEntries: MapEntry[] | null = null;
 
@@ -50,16 +73,48 @@ function mapList(): MapEntry[] {
   if (mapEntries !== null) return mapEntries;
   const available = loadJson(ROMFS + "maps/index.json") as string[] | null;
   const have = new Set(available ?? []);
-  mapEntries = [];
+  const sorted: { entry: MapEntry; section: number; group: number; rank: number }[] = [];
   for (const key of Object.keys(GameMapType)) {
     const type = (GameMapType as Record<string, GameMapType>)[key];
     const folder = key.toLowerCase();
     if (available !== null && !have.has(folder)) continue;
     const info = maps.find((m) => m.type === type);
     const translated = info ? t(info.translationKey) : type;
-    mapEntries.push({ folder, type, name: translated.startsWith("map.") ? type : translated });
+    const cats: string[] = info?.categories ?? [];
+    let section: number, group: number, rank = 0;
+    const fictional = FICTIONAL_GROUPS.findIndex((c) => cats.includes(c));
+    const real = REAL_GROUPS.findIndex((c) => cats.includes(c));
+    if (CONTINENTS.includes(info?.id ?? "")) {
+      section = 0;
+      group = 0;
+      rank = CONTINENTS.indexOf(info!.id);
+    } else if (fictional >= 0 || real < 0) {
+      section = 2;
+      group = Math.max(fictional, 0);
+    } else {
+      section = 1;
+      group = real;
+    }
+    sorted.push({
+      entry: { folder, type, name: translated.startsWith("map.") ? type : translated, section: "", group: "" },
+      section,
+      group,
+      rank,
+    });
   }
-  mapEntries.sort((a, b) => a.name.localeCompare(b.name));
+  sorted.sort(
+    (a, b) => a.section - b.section || a.group - b.group || a.rank - b.rank || a.entry.name.localeCompare(b.entry.name),
+  );
+  const sectionTitles = [t("port.continents"), t("port.real_maps"), t("port.fictional_maps")];
+  const groupKeys = [[], REAL_GROUPS, FICTIONAL_GROUPS];
+  mapEntries = sorted.map((m, i) => {
+    const prev = sorted[i - 1];
+    if (!prev || prev.section !== m.section) m.entry.section = sectionTitles[m.section];
+    if (m.section > 0 && (!prev || prev.section !== m.section || prev.group !== m.group)) {
+      m.entry.group = t("map_categories." + groupKeys[m.section][m.group]);
+    }
+    return m.entry;
+  });
   return mapEntries;
 }
 
@@ -327,6 +382,43 @@ const methods: Record<string, Handler> = {
   },
 };
 
+// BarPass.computeStructureProgress: deletion countdown, else construction,
+// else Silo/SAM reload; in per mille, -1 for no bar. Like the client, the
+// construction clock starts on the tick a unit is first seen being built.
+const constructionStart = new Map<number, number>();
+
+// OF.attackLabels(): a small stable key per attack id and its last front positions.
+const attackKeys = new Map<string, number>();
+const attackPositions = new Map<string, number[][]>();
+let nextAttackKey = 1;
+let attackPosTick = -Infinity;
+
+function structureProgress(u: Unit, ticks: number): number {
+  const config = game().config();
+  const clamp = (v: number) => Math.round(Math.max(0, Math.min(1, v)) * 1000);
+  const deletionAt = (u as any)._deletionAt as number | null;
+  if (deletionAt !== null && deletionAt !== undefined) {
+    return clamp((deletionAt - ticks) / config.deletionMarkDuration());
+  }
+  if (u.isUnderConstruction()) {
+    let start = constructionStart.get(u.id());
+    if (start === undefined) constructionStart.set(u.id(), (start = ticks));
+    const duration = config.unitInfo(u.type()).constructionDuration ?? 50;
+    return clamp((ticks - start) / duration);
+  }
+  constructionStart.delete(u.id());
+  if (u.type() === UnitType.MissileSilo || u.type() === UnitType.SAMLauncher) {
+    const queue = u.missileTimerQueue();
+    if (queue.length === 0) return -1;
+    const maxMissiles = u.level();
+    const cooldown = u.type() === UnitType.SAMLauncher ? config.SAMCooldown() : config.SiloCooldown();
+    let readiness = (maxMissiles - queue.length) / maxMissiles;
+    for (const timer of queue) readiness += (ticks - timer) / cooldown / maxMissiles;
+    if (readiness < 1) return clamp(readiness);
+  }
+  return -1;
+}
+
 const OF = {
   init(lang: string): void {
     initI18n(lang);
@@ -344,6 +436,12 @@ const OF = {
     return mapList()[i].folder;
   },
 
+  /** The picker headings map i opens: [section, group], "" when none. */
+  mapHeadings(i: number): string[] {
+    const m = mapList()[i];
+    return [m.section, m.group];
+  },
+
   start(opts: StartOptions): void {
     S.runner = null;
     S.pendingIntents = [];
@@ -355,6 +453,10 @@ const OF = {
     iconBits = new WeakMap();
     iconTick = -Infinity;
     turnNumber = 0;
+    constructionStart.clear();
+    attackKeys.clear();
+    attackPositions.clear();
+    attackPosTick = -Infinity;
     tileBatch = [];
     resetColors();
     resetEvents();
@@ -470,10 +572,55 @@ const OF = {
     return new Float64Array(out);
   },
 
-  /** Units: [kind, x, y, owner, level, flags, id, targetX, targetY] per unit. */
+  /**
+   * AttackingTroopsController: the troop labels at the fronts of the local
+   * player's attacks on players and of non-tribe attacks on it.
+   * [key, incoming, troops, nPositions, x0, y0, x1, y1] per attack.
+   */
+  attackLabels(): Float64Array {
+    const g = game();
+    const my = me();
+    const out: number[] = [];
+    if (!my || !my.isAlive()) return new Float64Array(0);
+    // The client polls the front positions every 200 ms (2 ticks).
+    const refresh = g.ticks() - attackPosTick >= 2 || g.ticks() < attackPosTick;
+    if (refresh) attackPosTick = g.ticks();
+    const live = new Set<string>();
+    const add = (a: any, incoming: boolean) => {
+      const id: string = a.id();
+      live.add(id);
+      let key = attackKeys.get(id);
+      if (key === undefined) attackKeys.set(id, (key = nextAttackKey++));
+      let pos = attackPositions.get(id);
+      if (refresh || pos === undefined) {
+        pos = a.clusteredPositions().map((t: number) => [g.x(t), g.y(t)]) as number[][];
+        attackPositions.set(id, pos);
+      }
+      const p0 = pos[0] ?? [0, 0];
+      const p1 = pos[1] ?? [0, 0];
+      out.push(key, incoming ? 1 : 0, a.troops(), Math.min(pos.length, 2), p0[0], p0[1], p1[0], p1[1]);
+    };
+    for (const a of my.outgoingAttacks()) {
+      if (a.target().isPlayer()) add(a, false);
+    }
+    for (const a of my.incomingAttacks()) {
+      const attacker = a.attacker();
+      if (attacker.isPlayer() && attacker.type() !== PlayerType.Bot) add(a, true);
+    }
+    for (const id of attackKeys.keys()) {
+      if (!live.has(id)) {
+        attackKeys.delete(id);
+        attackPositions.delete(id);
+      }
+    }
+    return new Float64Array(out);
+  },
+
+  /** Units: [kind, x, y, owner, level, flags, id, targetX, targetY, progress‰ or -1] per unit. */
   units(): Int32Array {
     const g = game();
     const my = me();
+    const ticks = g.ticks();
     const out: number[] = [];
     for (const u of g.units(UNIT_KINDS)) {
       if (!u.isActive()) continue;
@@ -498,6 +645,7 @@ const OF = {
         u.id(),
         dst !== undefined ? g.x(dst) : -1,
         dst !== undefined ? g.y(dst) : -1,
+        structureProgress(u, ticks),
       );
     }
     return new Int32Array(out);

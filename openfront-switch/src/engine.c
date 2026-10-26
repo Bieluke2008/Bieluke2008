@@ -494,6 +494,7 @@ static void refresh_relations(void) {
 static void refresh_snapshot(double tick_ms) {
     JSValue labels = call("labels", 0, NULL);
     JSValue units = call("units", 0, NULL);
+    JSValue attacks = call("attackLabels", 0, NULL);
     JSValue tiles = call("tileUpdates", 0, NULL);
     JSValue frame = call("frame", 0, NULL);
     char *frame_json = to_cstr(frame);
@@ -528,13 +529,25 @@ static void refresh_snapshot(double tick_ms) {
         const double *r = ld + i * 7;
         snap.labels[i] = (Label){(int)r[0], (float)r[1], (float)r[2], (float)r[3], r[4], (int)r[5], (int)r[6]};
     }
-    count = (int)(nu / 9);
+    count = (int)(nu / (sizeof(UnitRec) / sizeof(int32_t)));
     if (count > units_cap) {
         units_cap = count * 2 + 16;
         snap.units = realloc(snap.units, sizeof(UnitRec) * (size_t)units_cap);
     }
     snap.nunits = ud ? count : 0;
     if (ud && snap.nunits) memcpy(snap.units, ud, sizeof(UnitRec) * (size_t)snap.nunits);
+    size_t na = 0;
+    const double *ad = typed_data(attacks, &na, sizeof(double));
+    snap.nattacks = 0;
+    for (size_t i = 0; ad && i + 8 <= na && snap.nattacks < MAX_ATTACK_LABELS; i += 8) {
+        AttackLabel *a = &snap.attacks[snap.nattacks++];
+        a->key = (int)ad[i];
+        a->incoming = ad[i + 1] != 0;
+        a->troops = ad[i + 2];
+        a->npos = (int)ad[i + 3];
+        a->x[0] = (float)ad[i + 4], a->y[0] = (float)ad[i + 5];
+        a->x[1] = (float)ad[i + 6], a->y[1] = (float)ad[i + 7];
+    }
     if (ndirty + (int)ntu > dirty_cap) {
         dirty_cap = (ndirty + (int)ntu) * 2 + 1024;
         dirty = realloc(dirty, sizeof(uint32_t) * (size_t)dirty_cap);
@@ -549,6 +562,7 @@ static void refresh_snapshot(double tick_ms) {
 
     JS_FreeValue(ctx, labels);
     JS_FreeValue(ctx, units);
+    JS_FreeValue(ctx, attacks);
     JS_FreeValue(ctx, tiles);
     JS_FreeValue(ctx, frame);
 }
@@ -560,7 +574,7 @@ static void do_start(const StartOptions *o) {
     snap.terrain = NULL;
     snap.state = NULL;
     snap.colors = NULL;
-    snap.nlabels = snap.nunits = 0;
+    snap.nlabels = snap.nunits = snap.nattacks = 0;
     free(snap.frame);
     snap.frame = NULL;
     SDL_UnlockMutex(snap_lock);
@@ -669,6 +683,8 @@ static bool load_engine(void) {
     maps.nmaps = (int)array_len(list);
     maps.map_names = calloc((size_t)maps.nmaps + 1, NAME_LEN);
     maps.map_folders = calloc((size_t)maps.nmaps + 1, NAME_LEN);
+    maps.map_sections = calloc((size_t)maps.nmaps + 1, NAME_LEN);
+    maps.map_groups = calloc((size_t)maps.nmaps + 1, NAME_LEN);
     for (int i = 0; i < maps.nmaps; i++) {
         JSValue v = JS_GetPropertyUint32(ctx, list, (uint32_t)i);
         to_buf(v, maps.map_names[i], NAME_LEN);
@@ -677,6 +693,14 @@ static bool load_engine(void) {
         JSValue f = call("mapFolder", 1, &idx);
         to_buf(f, maps.map_folders[i], NAME_LEN);
         JS_FreeValue(ctx, f);
+        idx = JS_NewInt32(ctx, i);
+        JSValue h = call("mapHeadings", 1, &idx);
+        JSValue sec = JS_GetPropertyUint32(ctx, h, 0), grp = JS_GetPropertyUint32(ctx, h, 1);
+        to_buf(sec, maps.map_sections[i], NAME_LEN);
+        to_buf(grp, maps.map_groups[i], NAME_LEN);
+        JS_FreeValue(ctx, sec);
+        JS_FreeValue(ctx, grp);
+        JS_FreeValue(ctx, h);
     }
     JS_FreeValue(ctx, list);
 

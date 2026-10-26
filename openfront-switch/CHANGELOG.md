@@ -5,6 +5,19 @@ Cada versión es una etiqueta de git (`vX.Y.Z`) y, a partir de la 0.2.0, una
 workflow **OpenFront Switch release** al subir la etiqueta). El número de
 versión está en `VERSION` y se ve en la pantalla de inicio de la app.
 
+## 0.4.0
+
+- Barra de progreso bajo cada edificio, como en PC (14×3 casillas, de rojo a
+  verde): construcción, cuenta atrás al borrarlo y recarga de silos y SAM.
+- Número de tropas de cada ataque en su frente, como en PC: azul para tus
+  ataques contra jugadores, rojo para los que recibes (salvo de tribus);
+  se mueve suavemente con el frente y baja a medida que se gastan tropas.
+- Lista de mapas por secciones: arriba «Mundo y continentes» (Mundo, Mundo
+  gigante, Europa, África, Norteamérica, Sudamérica, Asia, Oceanía,
+  Antártida), luego «Lugares reales» por regiones y al final «Mapas
+  ficticios» (ficción, cósmico, arcade, torneo), con las categorías del
+  juego original.
+
 ## 0.3.0
 
 Rendimiento: la simulación (no el dibujado) era lo que iba lento, porque el
