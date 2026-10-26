@@ -5,3 +5,4 @@ romfs/
 *.nacp
 *.elf
 tools/node_modules/
+dist/

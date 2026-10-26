@@ -1,0 +1,46 @@
+name: OpenFront Switch release
+
+# Pushing a tag vX.Y.Z (matching openfront-switch/VERSION) builds the .nro
+# and publishes a GitHub release with the zip for the microSD.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: openfront-switch
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches VERSION
+        run: test "v$(cat VERSION)" = "${GITHUB_REF_NAME}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Fetch dependencies
+        run: ./scripts/fetch-deps.sh
+
+      - name: Build romfs
+        run: ./scripts/build-romfs.sh
+
+      - name: Build openfront.nro (devkitA64)
+        run: ./scripts/build-switch.sh
+
+      - name: Package the zip
+        run: ./scripts/package.sh
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: OpenFront Switch ${{ github.ref_name }}
+          body_path: openfront-switch/CHANGELOG.md
+          files: openfront-switch/dist/openfront-switch-${{ github.ref_name }}.zip
+          fail_on_unmatched_files: true

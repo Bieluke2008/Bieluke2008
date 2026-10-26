@@ -143,6 +143,7 @@ SoloResult solo_draw(StartOptions *o, int *speed_idx, const Input *in) {
     gfx_text(FONT_600, 16, T("port.title"), 1140, 34, 22, hex(0xb0a6b8), ALIGN_RIGHT);
     gfx_fill_rect((Rect){0, 611, PAGE_W, 109}, hex(CARD_BG));
     gfx_text(FONT_400, 12, T("port.credits"), PAGE_W / 2.0f, 690, 18, hex(0x8f8696), ALIGN_CENTER);
+    gfx_text(FONT_400, 12, "v" OPENFRONT_VERSION, PAGE_W / 2.0f, 668, 18, hex(0x8f8696), ALIGN_CENTER);
 
     Rect card = {262, 107, 756, 494};
     gfx_box(card, 12, hex(CARD_BG), 1, hex(CARD_BORDER));

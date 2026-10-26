@@ -25,7 +25,8 @@ ICON		:=	icon.jpg
 
 APP_TITLE	:=	OpenFront
 APP_AUTHOR	:=	OpenFront contributors (unofficial Switch port)
-APP_VERSION	:=	0.1.0
+# The one place the version lives: VERSION (also read by CMakeLists.txt).
+APP_VERSION	:=	$(shell cat $(TOPDIR)/VERSION)
 
 # QuickJS-ng ships tools and tests next to the library; only these are built.
 QJS_CFILES	:=	quickjs.c libregexp.c libunicode.c dtoa.c
@@ -38,7 +39,7 @@ ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS	:=	`$(PREFIX)pkg-config --cflags sdl2 SDL2_ttf SDL2_image` -Wall -O2 -ffunction-sections \
 			$(ARCH) $(DEFINES) -D_GNU_SOURCE
 
-CFLAGS	+=	$(INCLUDE) -D__SWITCH__
+CFLAGS	+=	$(INCLUDE) -D__SWITCH__ -DOPENFRONT_VERSION=\"$(APP_VERSION)\"
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)

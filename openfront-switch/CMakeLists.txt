@@ -26,5 +26,7 @@ add_executable(openfront
   src/main.c src/engine.c src/input.c src/gfx.c src/ui.c src/hud.c src/map.c
   src/radial.c src/menus.c src/solo.c deps/cjson/cJSON.c)
 target_include_directories(openfront PRIVATE src deps/cjson)
+file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/VERSION OPENFRONT_VERSION LIMIT_COUNT 1)
+target_compile_definitions(openfront PRIVATE OPENFRONT_VERSION="${OPENFRONT_VERSION}")
 target_compile_options(openfront PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 target_link_libraries(openfront PRIVATE quickjs PkgConfig::SDL2 ZLIB::ZLIB m pthread)

@@ -110,9 +110,10 @@ un círculo) y luego toca el destino.
 Necesitas una Switch con firmware personalizado (Atmosphère) y el Homebrew
 Menu.
 
-1. Descarga `openfront.nro` de los *artifacts* del workflow
-   **OpenFront Switch** en la pestaña *Actions* del repositorio (o compílalo).
-2. Cópialo a la carpeta `/switch/` de la microSD.
+1. Descarga el `.zip` de la versión que quieras en la pestaña *Releases*
+   del repositorio (cada versión está en `CHANGELOG.md`), o compílalo.
+2. Copia su carpeta `switch` a la raíz de la microSD (queda
+   `/switch/openfront.nro`; los mapas y demás datos van dentro).
 3. Abre el Homebrew Menu **manteniendo R al abrir un juego** (*title
    override*). Desde el álbum (modo applet) la app tiene mucha menos memoria
    y los mapas grandes pueden fallar.
@@ -130,6 +131,13 @@ cd openfront-switch
 ```
 
 `build-romfs.sh africa britannia` incluye solo esos mapas (para pruebas).
+`./scripts/package.sh` deja el zip para la microSD en `dist/`.
+
+### Versiones
+
+La versión está en `VERSION`. Para publicar una: actualizar `VERSION` y
+`CHANGELOG.md`, hacer commit y subir la etiqueta `vX.Y.Z`; el workflow
+**OpenFront Switch release** compila y crea la *release* con el zip.
 
 ### Versión de escritorio (para desarrollar)
 
