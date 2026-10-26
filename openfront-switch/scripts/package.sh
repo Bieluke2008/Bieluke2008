@@ -23,9 +23,10 @@ Instalar (Switch con Atmosphere y Homebrew Menu):
 Controles: en la partida, Menu (+) > Ajustes muestra la lista completa.
 Tactil: tocar = clic, mantener = menu radial, arrastrar = mover, pellizcar = zoom.
 
-Notas para las pruebas: esta version no se ha probado aun en una Switch
-real. Si algo falla, anota el mapa, el numero de tribus y que estabas
-haciendo. Para que vaya mas fluido: mapas pequenos y menos tribus.
+Notas para las pruebas: si algo falla, anota el mapa, el numero de tribus
+y que estabas haciendo. Para medir la velocidad, compara el reloj de la
+partida (arriba) con un cronometro: a velocidad x1 deberian avanzar igual.
+Si va lento: mapas pequenos y menos tribus/naciones.
 TXT
 out="dist/openfront-switch-v${version}.zip"
 rm -f "$out"

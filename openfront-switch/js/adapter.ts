@@ -81,6 +81,9 @@ let error: string | null = null;
 let turnNumber = 0;
 let tileBatch: Uint32Array[] = [];
 let names: Record<string, { x: number; y: number; size: number }> = {};
+// OF.labels()'s icon bits per player, as of iconTick.
+let iconBits = new WeakMap<object, number>();
+let iconTick = -Infinity;
 let startOptions: StartOptions | null = null;
 let playersVersion = 0;
 
@@ -309,11 +312,15 @@ const methods: Record<string, Handler> = {
   /** RelationMatrix.ts: [a, b, rel] triples, 1 friendly, 2 embargo. */
   relations: () => {
     const out: number[] = [];
-    const players = game().players();
-    for (const p of players) {
+    const g = game();
+    for (const p of g.players()) {
       for (const ally of p.allies()) out.push(p.smallID(), ally.smallID(), 1);
-      for (const other of players) {
-        if (p !== other && p.hasEmbargoAgainst(other)) out.push(p.smallID(), other.smallID(), 2);
+      // hasEmbargoAgainst(other) is embargoes.has(other.id()): walk the map
+      // instead of testing every pair.
+      for (const id of (p as any).embargoes.keys()) {
+        if (!g.hasPlayer(id)) continue;
+        const other = g.player(id);
+        if (other !== p && other.isAlive()) out.push(p.smallID(), other.smallID(), 2);
       }
     }
     return out;
@@ -345,6 +352,8 @@ const OF = {
     S.ui.attackRatio = 0.2;
     error = null;
     names = {};
+    iconBits = new WeakMap();
+    iconTick = -Infinity;
     turnNumber = 0;
     tileBatch = [];
     resetColors();
@@ -435,16 +444,25 @@ const OF = {
   labels(): Float64Array {
     const g = game();
     const my = me();
-    const first = firstPlace();
+    const ticks = g.ticks();
+    // The icons change rarely and cost the most: refresh them every 4 ticks.
+    const refreshIcons = ticks - iconTick >= 4 || ticks < iconTick;
+    if (refreshIcons) iconTick = ticks;
+    let first: ReturnType<typeof firstPlace> | undefined;
     const out: number[] = [];
     for (const p of g.players()) {
       if (!p.isAlive()) continue;
       const nv = names[p.id()];
       if (!nv || nv.size <= 0) continue;
-      let bits = 0;
-      for (const icon of playerIcons(p, first)) bits |= ICON_BITS[icon] ?? 0;
-      if (p.isTraitor()) bits |= ICON_BITS.traitor;
-      if (my && my !== p && my.isAlliedWith(p)) bits |= ICON_BITS.alliance;
+      let bits = iconBits.get(p);
+      if (refreshIcons || bits === undefined) {
+        bits = 0;
+        if (first === undefined) first = firstPlace();
+        for (const icon of playerIcons(p, first)) bits |= ICON_BITS[icon] ?? 0;
+        if (p.isTraitor()) bits |= ICON_BITS.traitor;
+        if (my && my !== p && my.isAlliedWith(p)) bits |= ICON_BITS.alliance;
+        iconBits.set(p, bits);
+      }
       const e = p.outgoingEmojis().find((x) => x.recipientID === AllPlayers || x.recipientID === my?.smallID());
       const emojiIndex = e ? (flattenedEmojiTable as readonly string[]).indexOf(e.message) : -1;
       out.push(p.smallID(), nv.x, nv.y, nv.size, p.troops(), bits, emojiIndex + 1);
