@@ -25,6 +25,8 @@ find_package(ZLIB REQUIRED)
 add_executable(openfront
   src/main.c src/engine.c src/input.c src/gfx.c src/ui.c src/hud.c src/map.c
   src/radial.c src/menus.c src/solo.c src/native.c src/clocks.c deps/cjson/cJSON.c)
+# DetMath's exp/log in native.c must round like the TS: no fused multiply-add.
+set_source_files_properties(src/native.c PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
 target_include_directories(openfront PRIVATE src deps/cjson)
 file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/VERSION OPENFRONT_VERSION LIMIT_COUNT 1)
 target_compile_definitions(openfront PRIVATE OPENFRONT_VERSION="${OPENFRONT_VERSION}")

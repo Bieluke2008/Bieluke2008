@@ -184,6 +184,7 @@ static struct {
     const char *name;
     double ms;
     int n;
+    double max;
 } prof[PROF_MAX];
 static int nprof;
 static bool profiling;
@@ -193,17 +194,20 @@ static void prof_add(const char *name, double ms) {
         if (!strcmp(prof[i].name, name)) {
             prof[i].ms += ms;
             prof[i].n++;
+            if (ms > prof[i].max) prof[i].max = ms;
             return;
         }
     }
-    if (nprof < PROF_MAX) prof[nprof++] = (typeof(prof[0])){strdup(name), ms, 1};
+    if (nprof < PROF_MAX) prof[nprof++] = (typeof(prof[0])){strdup(name), ms, 1, ms};
 }
 
 static void prof_dump(int ticks) {
     fprintf(stderr, "--- profile over %d ticks (ms per tick) ---\n", ticks);
     for (int i = 0; i < nprof; i++) {
-        fprintf(stderr, "  %-14s %8.2f  (%d calls)\n", prof[i].name, prof[i].ms / ticks, prof[i].n);
-        prof[i].ms = 0;
+        if (!prof[i].n) continue;
+        fprintf(stderr, "  %-14s %8.2f  max %7.2f  (%d calls)\n", prof[i].name, prof[i].ms / ticks, prof[i].max,
+                prof[i].n);
+        prof[i].ms = prof[i].max = 0;
         prof[i].n = 0;
     }
 }
@@ -217,9 +221,22 @@ void JS_PortWalkStack(JSRuntime *rt, void (*cb)(void *, const char *, int, int),
 static struct {
     char key[80];
     int self, incl, stamp;
+    int pself, pincl;  // this call's, until sample_commit
 } samples[SAMPLE_SLOTS];
-static int sample_stamp, sample_total;
+static int sample_stamp, sample_total, sample_pending;
 static bool sample_self_done;
+static int touched[SAMPLE_SLOTS], ntouched;
+
+/** Keeps (or with keep false drops) the samples of the call that just ended. */
+static void sample_commit(bool keep) {
+    for (int i = 0; i < ntouched; i++) {
+        int k = touched[i];
+        if (keep) samples[k].self += samples[k].pself, samples[k].incl += samples[k].pincl;
+        samples[k].pself = samples[k].pincl = 0;
+    }
+    if (keep) sample_total += sample_pending;
+    ntouched = sample_pending = 0;
+}
 
 static int sample_slot(const char *key) {
     unsigned h = 2166136261u;
@@ -240,20 +257,21 @@ static void sample_frame(void *opaque, const char *name, int line, int depth) {
     char key[80];
     snprintf(key, sizeof key, "%s:%d", name && *name ? name : "<anon>", line);
     int k = sample_slot(key);
+    if (!samples[k].pself && !samples[k].pincl && ntouched < SAMPLE_SLOTS) touched[ntouched++] = k;
     if (!sample_self_done) {
-        samples[k].self++;
+        samples[k].pself++;
         if (strcmp(name ? name : "", "[native]") != 0) sample_self_done = true;
     }
     if (samples[k].stamp != sample_stamp) {
         samples[k].stamp = sample_stamp;
-        samples[k].incl++;
+        samples[k].pincl++;
     }
 }
 
 static int sample_handler(JSRuntime *r, void *opaque) {
     (void)opaque;
     sample_stamp++;
-    sample_total++;
+    sample_pending++;
     sample_self_done = false;
     JS_PortWalkStack(r, sample_frame, NULL);
     return 0;
@@ -282,11 +300,27 @@ static void sample_dump(void) {
 
 static JSValue call_raw(const char *name, int argc, JSValue *argv);
 
+/** OPENFRONT_SLOW_MS=n: calls slower than n ms are logged (finding hitches). */
+static double slow_threshold(void) {
+    static double slow_ms = -1;
+    if (slow_ms < 0) slow_ms = getenv("OPENFRONT_SLOW_MS") ? atof(getenv("OPENFRONT_SLOW_MS")) : 1e9;
+    return slow_ms;
+}
+
 static JSValue call(const char *name, int argc, JSValue *argv) {
     if (!profiling) return call_raw(name, argc, argv);
     double t0 = now_ms();
     JSValue v = call_raw(name, argc, argv);
-    prof_add(name, now_ms() - t0);
+    double ms = now_ms() - t0;
+    prof_add(name, ms);
+    double slow_ms = slow_threshold();
+    static int calls_of_tick;
+    if (!strcmp(name, "tick")) calls_of_tick++;
+    if (ms > slow_ms) fprintf(stderr, "SLOW %s %.1f ms at tick call %d\n", name, ms, calls_of_tick);
+#ifdef OPENFRONT_JS_SAMPLER
+    // With OPENFRONT_SLOW_MS the sampler only keeps what ran in slow calls.
+    sample_commit(slow_ms >= 1e9 || (ms > slow_ms && !strcmp(name, "tick")));
+#endif
     return v;
 }
 
@@ -351,7 +385,9 @@ static char *rpc(const char *method, const char *args) {
     if (profiling) {
         char name[64];
         snprintf(name, sizeof name, "rpc:%s", method);
-        prof_add(name, now_ms() - t0);
+        double ms = now_ms() - t0;
+        prof_add(name, ms);
+        if (ms > slow_threshold()) fprintf(stderr, "SLOW %s %.1f ms (%s)\n", name, ms, args ? args : "");
     }
     return s ? s : strdup("null");
 }

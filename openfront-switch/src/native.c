@@ -794,7 +794,31 @@ static JSValue set_values(JSContext *ctx, JSValueConst this_val, int argc, JSVal
     return obj;
 }
 
+/** __bbox(width) -> [minX, minY, maxX, maxY] of the members (x = t % width), or null if empty. */
+static JSValue set_bbox(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    TSet *s = JS_GetOpaque2(ctx, this_val, set_class);
+    if (!s || argc < 1) return JS_EXCEPTION;
+    int64_t w = iarg(ctx, argv[0]);
+    if (w <= 0) return JS_NULL;
+    int64_t minx = INT64_MAX, miny = INT64_MAX, maxx = INT64_MIN, maxy = INT64_MIN;
+    bool any = false;
+    for (int i = 0; i < s->dense_len; i++) {
+        uint32_t t = s->dense[i];
+        if (t == TOMBSTONE) continue;
+        int64_t x = (int64_t)t % w, y = (int64_t)t / w;
+        if (x < minx) minx = x;
+        if (y < miny) miny = y;
+        if (x > maxx) maxx = x;
+        if (y > maxy) maxy = y;
+        any = true;
+    }
+    if (!any) return JS_NULL;
+    JSValue v[4] = {num(minx), num(miny), num(maxx), num(maxy)};
+    return JS_NewArrayFrom(ctx, 4, v);
+}
+
 static const JSCFunctionListEntry set_proto[] = {
+    JS_CFUNC_DEF("__bbox", 1, set_bbox),
     JS_CGETSET_DEF("size", set_size, NULL),
     JS_CFUNC_DEF("has", 1, set_has_js),
     JS_CFUNC_DEF("add", 1, set_add_js),
@@ -1257,6 +1281,595 @@ out:
     return best < 0 ? JS_NULL : num(best);
 }
 
+/**
+ * AStarWaterBounded.searchBounded (pathfinding/algorithms/AStar.WaterBounded.ts)
+ * after its stamp bump and area check, with the instance's arrays passed in:
+ * astarBounded(terrain, mapWidth, closedStamp, gScoreStamp, gScore, cameFrom,
+ *              stamp, starts[], goal, minX, maxX, minY, maxY, weight, maxIterations)
+ * -> TileRef[] | null. The MinHeap is the TS one step for step: float32
+ * priorities, swap-based sift up (stops on <=) and down (strict <).
+ */
+static struct {
+    int32_t *node;
+    float *pri;
+    int size, cap;
+} mh;
+
+static void mh_push(int32_t node, double priority) {
+    if (mh.size >= mh.cap) {
+        mh.cap = mh.cap ? mh.cap * 2 : 4096;
+        mh.node = realloc(mh.node, sizeof(int32_t) * (size_t)mh.cap);
+        mh.pri = realloc(mh.pri, sizeof(float) * (size_t)mh.cap);
+    }
+    int i = mh.size++;
+    mh.node[i] = node;
+    mh.pri[i] = (float)priority;
+    while (i > 0) {
+        int parent = (i - 1) >> 1;
+        if (mh.pri[parent] <= mh.pri[i]) break;
+        int32_t tn = mh.node[parent];
+        float tp = mh.pri[parent];
+        mh.node[parent] = mh.node[i], mh.pri[parent] = mh.pri[i];
+        mh.node[i] = tn, mh.pri[i] = tp;
+        i = parent;
+    }
+}
+
+static int32_t mh_pop(void) {
+    int32_t result = mh.node[0];
+    mh.size--;
+    if (mh.size > 0) {
+        mh.node[0] = mh.node[mh.size];
+        mh.pri[0] = mh.pri[mh.size];
+        int i = 0;
+        for (;;) {
+            int left = (i << 1) + 1, right = left + 1, smallest = i;
+            if (left < mh.size && mh.pri[left] < mh.pri[smallest]) smallest = left;
+            if (right < mh.size && mh.pri[right] < mh.pri[smallest]) smallest = right;
+            if (smallest == i) break;
+            int32_t tn = mh.node[smallest];
+            float tp = mh.pri[smallest];
+            mh.node[smallest] = mh.node[i], mh.pri[smallest] = mh.pri[i];
+            mh.node[i] = tn, mh.pri[i] = tp;
+            i = smallest;
+        }
+    }
+    return result;
+}
+
+static inline double magnitude_penalty(unsigned magnitude) {
+    if (magnitude < 3) return 300;
+    if (magnitude <= 10) return 0;
+    return 100;
+}
+
+static JSValue js_astar_bounded(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 15) return JS_ThrowTypeError(ctx, "astarBounded: bad arguments");
+    size_t tb = 0, cb = 0, gsb = 0, gb = 0, fb = 0;
+    const uint8_t *terrain = typed_ptr(ctx, argv[0], &tb);
+    int64_t mw = iarg(ctx, argv[1]);
+    uint32_t *closed = typed_ptr(ctx, argv[2], &cb);
+    uint32_t *gstamp = typed_ptr(ctx, argv[3], &gsb);
+    uint32_t *g = typed_ptr(ctx, argv[4], &gb);
+    int32_t *came = typed_ptr(ctx, argv[5], &fb);
+    if (!terrain || !closed || !gstamp || !g || !came || mw <= 0) return JS_ThrowTypeError(ctx, "astarBounded: arrays");
+    uint32_t stamp = (uint32_t)darg(ctx, argv[6]);
+    int64_t goal = iarg(ctx, argv[8]);
+    int64_t minX = iarg(ctx, argv[9]), maxX = iarg(ctx, argv[10]), minY = iarg(ctx, argv[11]), maxY = iarg(ctx, argv[12]);
+    double weight = darg(ctx, argv[13]);
+    double iterations = darg(ctx, argv[14]);
+    int64_t bw = maxX - minX + 1, bh = maxY - minY + 1, nlocal = bw * bh;
+    int64_t cap = (int64_t)(cb / 4);
+    if ((int64_t)(gsb / 4) < cap) cap = (int64_t)(gsb / 4);
+    if ((int64_t)(gb / 4) < cap) cap = (int64_t)(gb / 4);
+    if ((int64_t)(fb / 4) < cap) cap = (int64_t)(fb / 4);
+    if (nlocal > cap || bw <= 0 || bh <= 0) return JS_NULL;
+    int64_t tsize = (int64_t)tb;
+#define TER(t) ((t) >= 0 && (t) < tsize ? terrain[t] : 0)
+#define TO_LOCAL(tile, out)                                         \
+    do {                                                            \
+        int64_t x_ = (tile) % mw, y_ = (tile) / mw;                 \
+        x_ = x_ < minX ? minX : x_ > maxX ? maxX : x_;              \
+        y_ = y_ < minY ? minY : y_ > maxY ? maxY : y_;              \
+        (out) = (y_ - minY) * bw + (x_ - minX);                     \
+    } while (0)
+    int64_t goalX = goal % mw, goalY = goal / mw, goal_local;
+    TO_LOCAL(goal, goal_local);
+    if (goal_local < 0 || goal_local >= nlocal) return JS_NULL;
+    mh.size = 0;
+
+    // starts: a number or an array of numbers
+    int64_t nstarts = 1;
+    bool is_arr = JS_IsArray(argv[7]);
+    if (is_arr) {
+        JSValue len = JS_GetPropertyStr(ctx, argv[7], "length");
+        nstarts = iarg(ctx, len);
+        JS_FreeValue(ctx, len);
+    }
+    int64_t s0 = -1;
+    for (int64_t i = 0; i < nstarts; i++) {
+        int64_t s;
+        if (is_arr) {
+            JSValue v = JS_GetPropertyUint32(ctx, argv[7], (uint32_t)i);
+            s = iarg(ctx, v);
+            JS_FreeValue(ctx, v);
+        } else {
+            s = iarg(ctx, argv[7]);
+        }
+        if (i == 0) s0 = s;
+        int64_t sl;
+        TO_LOCAL(s, sl);
+        if (sl < 0 || sl >= nlocal) continue;
+        g[sl] = 0;
+        gstamp[sl] = stamp;
+        came[sl] = -1;
+        int64_t sx = s % mw, sy = s / mw;
+        mh_push((int32_t)sl, weight * 100 * (double)(llabs(sx - goalX) + llabs(sy - goalY)));
+    }
+    // Cross-product tie-breaker against the start-goal line (starts[0]).
+    double dxGoal = 0, dyGoal = 0;
+    if (s0 >= 0 || nstarts > 0) {
+        dxGoal = (double)(goalX - s0 % mw);
+        dyGoal = (double)(goalY - s0 / mw);
+    }
+    double crossNorm = fmax(1, fabs(dxGoal) + fabs(dyGoal));
+#define TIE(nx, ny) floor((fabs(dxGoal * (double)((ny) - goalY) - dyGoal * (double)((nx) - goalX)) * 99) / crossNorm / crossNorm)
+    while (mh.size > 0) {
+        if (--iterations <= 0) return JS_NULL;
+        int64_t cur = mh_pop();
+        if (closed[cur] == stamp) continue;
+        closed[cur] = stamp;
+        if (cur == goal_local) {
+            JSValue path = JS_NewArray(ctx);
+            int64_t n = 0;
+            for (int64_t c = goal_local, it = 0; c != -1 && it < nlocal; c = came[c], it++) n++;
+            int64_t idx = n;
+            for (int64_t c = goal_local, it = 0; c != -1 && it < nlocal; c = came[c], it++) {
+                int64_t gl = ((c / bw) + minY) * mw + (c % bw) + minX;
+                JS_SetPropertyUint32(ctx, path, (uint32_t)--idx, num(gl));
+            }
+            return path;
+        }
+        double curG = g[cur];
+        int64_t cxl = cur % bw, cyl = cur / bw;
+        int64_t cx = cxl + minX, cy = cyl + minY;
+        int64_t current = cy * mw + cx;
+        int64_t nbs[4], nls[4], nxs[4], nys[4];
+        int n = 0;
+        if (cy > minY) nbs[n] = current - mw, nls[n] = cur - bw, nxs[n] = cx, nys[n] = cy - 1, n++;
+        if (cy < maxY) nbs[n] = current + mw, nls[n] = cur + bw, nxs[n] = cx, nys[n] = cy + 1, n++;
+        if (cx > minX) nbs[n] = current - 1, nls[n] = cur - 1, nxs[n] = cx - 1, nys[n] = cy, n++;
+        if (cx < maxX) nbs[n] = current + 1, nls[n] = cur + 1, nxs[n] = cx + 1, nys[n] = cy, n++;
+        for (int k = 0; k < n; k++) {
+            int64_t nb = nbs[k], nl = nls[k];
+            unsigned t = TER(nb);
+            if (closed[nl] == stamp || !(nb == goal || (t & 0x80) == 0)) continue;
+            double dist = (double)(llabs(nxs[k] - goalX) + llabs(nys[k] - goalY));
+            double tentative = curG + 100 + magnitude_penalty(t & 0x1f);
+            if (gstamp[nl] != stamp || tentative < (double)g[nl]) {
+                came[nl] = (int32_t)cur;
+                g[nl] = (uint32_t)tentative;
+                gstamp[nl] = stamp;
+                mh_push((int32_t)nl, tentative + weight * 100 * dist + TIE(nxs[k], nys[k]));
+            }
+        }
+    }
+#undef TIE
+#undef TO_LOCAL
+#undef TER
+    return JS_NULL;
+}
+
+static JSAtom atom_component_ids, atom_land_marker, atom_parents;
+
+/** ConnectedComponents.getComponentId(t) on the object `cc`; -1 on a JS error. */
+static int64_t cc_component(JSContext *ctx, JSValueConst cc, int64_t t) {
+    JSValue ids = JS_GetProperty(ctx, cc, atom_component_ids);
+    if (JS_IsNull(ids) || JS_IsUndefined(ids)) return 0;
+    size_t bytes = 0;
+    size_t off = 0, len = 0, per = 0;
+    JSValue buf = JS_GetTypedArrayBuffer(ctx, ids, &off, &len, &per);
+    JS_FreeValue(ctx, ids);
+    if (JS_IsException(buf)) return -1;
+    uint8_t *p = JS_GetArrayBuffer(ctx, &bytes, buf);
+    JS_FreeValue(ctx, buf);
+    if (!p || per == 0) return -1;
+    p += off;
+    int64_t n = (int64_t)(len / per);
+    int64_t id = 0;
+    if (t >= 0 && t < n) id = per == 1 ? p[t] : per == 2 ? ((uint16_t *)p)[t] : ((uint32_t *)p)[t];
+    JSValue lm = JS_GetProperty(ctx, cc, atom_land_marker);
+    int64_t land = iarg(ctx, lm);
+    JS_FreeValue(ctx, lm);
+    if (id == 0 || id == land) return id;
+    // find(id) with path compression, on the parents array.
+    JSValue parents = JS_GetProperty(ctx, cc, atom_parents);
+    int64_t root = id;
+    for (int guard = 0; guard < 1 << 20; guard++) {
+        JSValue v = JS_GetPropertyUint32(ctx, parents, (uint32_t)root);
+        int64_t pr = iarg(ctx, v);
+        JS_FreeValue(ctx, v);
+        if (pr == root) break;
+        root = pr;
+    }
+    int64_t cur = id;
+    for (int guard = 0; guard < 1 << 20; guard++) {
+        JSValue v = JS_GetPropertyUint32(ctx, parents, (uint32_t)cur);
+        int64_t next = iarg(ctx, v);
+        JS_FreeValue(ctx, v);
+        if (next == root) break;
+        JS_SetPropertyUint32(ctx, parents, (uint32_t)cur, num(root));
+        cur = next;
+    }
+    JS_FreeValue(ctx, parents);
+    return root;
+}
+
+/**
+ * WaterManager.getWaterComponent(tile) with the mini map bound in slot 1 and
+ * the mini water graph's ConnectedComponents `cc`:
+ * waterComponent(tile, cc) -> number | null, or undefined when the TS must
+ * decide (a mini coordinate off the mini map, where it throws).
+ */
+#define WC_NULL (-2)
+#define WC_UNDECIDED (-3)
+
+/** waterComponent() as an integer: the id, WC_NULL, or WC_UNDECIDED. */
+static int64_t water_component(JSContext *ctx, int64_t tile, JSValueConst cc) {
+    if (nmaps < 2) return WC_UNDECIDED;
+    const NMap *m = &maps[0], *mm = &maps[1];
+    int64_t mx = xof(m, tile) / 2, my = yof(m, tile) / 2;
+    if (tile < 0 || mx < 0 || mx >= mm->w || my < 0 || my >= mm->h) return WC_UNDECIDED;
+    int64_t mt = my * mm->w + mx, w = mm->w;
+    int64_t found = -1;
+#define MWATER(t) (!is_land(mm, (t)))
+#define MNB(t, out, n)                                  \
+    do {                                                \
+        int64_t x_ = (t) % w;                           \
+        n = 0;                                          \
+        if ((t) >= w) out[n++] = (t) - w;               \
+        if ((t) < (mm->h - 1) * w) out[n++] = (t) + w;  \
+        if (x_ != 0) out[n++] = (t) - 1;                \
+        if (x_ != w - 1) out[n++] = (t) + 1;            \
+    } while (0)
+    if (MWATER(mt)) {
+        found = mt;
+    } else {
+        int64_t nb[4], nb2[4];
+        int n, n2;
+        MNB(mt, nb, n);
+        for (int i = 0; i < n && found < 0; i++) {
+            if (MWATER(nb[i])) found = nb[i];
+        }
+        for (int i = 0; i < n && found < 0; i++) {
+            MNB(nb[i], nb2, n2);
+            for (int k = 0; k < n2 && found < 0; k++) {
+                if (MWATER(nb2[k])) found = nb2[k];
+            }
+        }
+    }
+#undef MNB
+#undef MWATER
+    if (found < 0) return WC_NULL;
+    int64_t id = cc_component(ctx, cc, found);
+    return id < 0 ? WC_UNDECIDED : id;
+}
+
+/**
+ * WaterManager.getWaterComponent(tile) with the mini map bound in slot 1 and
+ * the mini water graph's ConnectedComponents `cc`:
+ * waterComponent(tile, cc) -> number | null, or undefined when the TS must
+ * decide (a mini coordinate off the mini map, where it throws).
+ */
+static JSValue js_water_component(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 2) return JS_UNDEFINED;
+    int64_t id = water_component(ctx, iarg(ctx, argv[0]), argv[1]);
+    if (id == WC_UNDECIDED) return JS_UNDEFINED;
+    if (id == WC_NULL) return JS_NULL;
+    return num(id);
+}
+
+static inline bool is_shore_land(const NMap *m, int64_t t) { return is_land(m, t) && (T(m, t) & 0x40); }
+
+/**
+ * The border-tile scans of SpatialQuery.closestShoreByWater (mode 0: the
+ * shore tiles whose component is `target`, in set order) and
+ * SpatialQuery.reachableComponents (mode 1: the components of the shore
+ * tiles, in visit order, nulls skipped):
+ * shoreScan(borderTiles, cc, mode, target) -> number[], or undefined when a
+ * tile needs the TS (see waterComponent).
+ */
+static JSValue js_shore_scan(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 4 || nmaps < 2) return JS_UNDEFINED;
+    TSet *set = JS_GetOpaque2(ctx, argv[0], set_class);
+    if (!set) return JS_EXCEPTION;
+    int mode = (int)iarg(ctx, argv[2]);
+    int64_t target = iarg(ctx, argv[3]);
+    const NMap *m = &maps[0];
+    JSValue out = JS_NewArray(ctx);
+    uint32_t n = 0;
+    for (int i = 0; i < set->dense_len; i++) {
+        uint32_t t = set->dense[i];
+        if (t == TOMBSTONE || !is_shore_land(m, t)) continue;
+        int64_t c = water_component(ctx, t, argv[1]);
+        if (c == WC_UNDECIDED) {
+            JS_FreeValue(ctx, out);
+            return JS_UNDEFINED;
+        }
+        if (mode == 0) {
+            if (c == target) JS_SetPropertyUint32(ctx, out, n++, num(t));
+        } else if (c != WC_NULL) {
+            JS_SetPropertyUint32(ctx, out, n++, num(c));
+        }
+    }
+    return out;
+}
+
+/**
+ * SharedWaterCache.waterFor's scan: the water next to the border's shore
+ * tiles. lakeScan(borderTiles, cc) -> [hasOcean, lakeComponent...] in visit
+ * order (lake neighbours without a component skipped), or undefined.
+ */
+static JSValue js_lake_scan(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 2 || nmaps < 2) return JS_UNDEFINED;
+    TSet *set = JS_GetOpaque2(ctx, argv[0], set_class);
+    if (!set) return JS_EXCEPTION;
+    const NMap *m = &maps[0];
+    int64_t w = m->w;
+    bool ocean = false;
+    JSValue out = JS_NewArray(ctx);
+    uint32_t n = 1;
+    for (int i = 0; i < set->dense_len; i++) {
+        int64_t t = set->dense[i];
+        if (set->dense[i] == TOMBSTONE || !is_shore_land(m, t)) continue;
+        int64_t x = xof(m, t), nb[4];
+        int k = 0;
+        if (t >= w) nb[k++] = t - w;
+        if (t < (m->h - 1) * w) nb[k++] = t + w;
+        if (x != 0) nb[k++] = t - 1;
+        if (x != w - 1) nb[k++] = t + 1;
+        for (int j = 0; j < k; j++) {
+            if (is_land(m, nb[j])) continue;
+            if (is_ocean(m, nb[j])) {
+                ocean = true;
+                continue;
+            }
+            int64_t c = water_component(ctx, nb[j], argv[1]);
+            if (c == WC_UNDECIDED) {
+                JS_FreeValue(ctx, out);
+                return JS_UNDEFINED;
+            }
+            if (c != WC_NULL) JS_SetPropertyUint32(ctx, out, n++, num(c));
+        }
+    }
+    JS_SetPropertyUint32(ctx, out, 0, JS_NewBool(ctx, ocean));
+    return out;
+}
+
+/**
+ * PlayerImpl.computeNearby() + shoreReachableNeighbors(): the small ids of
+ * the players (0 = terra nullius) next to the border, or across up to 4
+ * water tiles from every 10th shore tile, in the TS Set's insertion order.
+ * nearbyIds(borderTiles, smallID) -> number[]
+ */
+static JSValue js_nearby_ids(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 2 || nmaps == 0) return JS_ThrowTypeError(ctx, "nearbyIds: bad arguments");
+    TSet *set = JS_GetOpaque2(ctx, argv[0], set_class);
+    if (!set) return JS_EXCEPTION;
+    const NMap *m = &maps[0];
+    unsigned me = (unsigned)iarg(ctx, argv[1]);
+    static uint32_t seen[4096], seen_stamp;
+    if (++seen_stamp == 0) memset(seen, 0, sizeof seen), seen_stamp = 1;
+    JSValue out = JS_NewArray(ctx);
+    uint32_t n = 0;
+    int64_t w = m->w, h = m->h;
+#define ADD(owner)                                                   \
+    do {                                                             \
+        unsigned o_ = (owner);                                       \
+        if (seen[o_] != seen_stamp) {                                \
+            seen[o_] = seen_stamp;                                   \
+            JS_SetPropertyUint32(ctx, out, n++, JS_NewInt32(ctx, (int32_t)o_)); \
+        }                                                            \
+    } while (0)
+    for (int i = 0; i < set->dense_len; i++) {
+        if (set->dense[i] == TOMBSTONE) continue;
+        int64_t t = set->dense[i], x = xof(m, t), nb[4];
+        int k = 0;
+        if (t >= w) nb[k++] = t - w;
+        if (t < (h - 1) * w) nb[k++] = t + w;
+        if (x != 0) nb[k++] = t - 1;
+        if (x != w - 1) nb[k++] = t + 1;
+        for (int j = 0; j < k; j++) {
+            int64_t q = nb[j];
+            if (!is_land(m, q) || is_impassable(m, q)) continue;
+            unsigned owner = owner_id(m, q);
+            if (owner == 0 && (S(m, q) & (1 << 13))) continue;  // unowned fallout
+            if (owner != me) ADD(owner);
+        }
+    }
+    static const int dxs[4] = {0, 0, -1, 1}, dys[4] = {-1, 1, 0, 0};
+    int shore_idx = 0;
+    for (int i = 0; i < set->dense_len; i++) {
+        if (set->dense[i] == TOMBSTONE) continue;
+        int64_t t = set->dense[i];
+        if (!is_shore_land(m, t)) continue;
+        if (shore_idx++ % 10 != 0) continue;
+        int64_t bx = xof(m, t), by = yof(m, t);
+        for (int d = 0; d < 4; d++) {
+            int64_t x1 = bx + dxs[d], y1 = by + dys[d];
+            if (x1 < 0 || x1 >= w || y1 < 0 || y1 >= h || is_land(m, y1 * w + x1)) continue;
+            int64_t nx = bx + dxs[d] * 5, ny = by + dys[d] * 5;
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+            int64_t q = ny * w + nx;
+            if (!is_land(m, q) || is_impassable(m, q)) continue;
+            unsigned owner = owner_id(m, q);
+            if (owner == 0 && (S(m, q) & (1 << 13))) continue;
+            if (owner != me) ADD(owner);
+        }
+    }
+#undef ADD
+    return out;
+}
+
+/**
+ * NationAttackBehavior.chooseAttack()'s border scan: the small ids of the
+ * players next to the border in discovery order, and whether it touches
+ * unowned land without fallout.
+ * borderScan(borderTiles, smallID) -> [nonNukedTerraNullius, id...]
+ */
+static JSValue js_border_scan(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 2 || nmaps == 0) return JS_ThrowTypeError(ctx, "borderScan: bad arguments");
+    TSet *set = JS_GetOpaque2(ctx, argv[0], set_class);
+    if (!set) return JS_EXCEPTION;
+    const NMap *m = &maps[0];
+    unsigned me = (unsigned)iarg(ctx, argv[1]);
+    static uint32_t seen[4096], seen_stamp;
+    if (++seen_stamp == 0) memset(seen, 0, sizeof seen), seen_stamp = 1;
+    JSValue out = JS_NewArray(ctx);
+    uint32_t n = 1;
+    bool tn = false;
+    int64_t w = m->w;
+    for (int i = 0; i < set->dense_len; i++) {
+        if (set->dense[i] == TOMBSTONE) continue;
+        int64_t t = set->dense[i], x = xof(m, t), nb[4];
+        int k = 0;
+        if (t >= w) nb[k++] = t - w;
+        if (t < (m->h - 1) * w) nb[k++] = t + w;
+        if (x != 0) nb[k++] = t - 1;
+        if (x != w - 1) nb[k++] = t + 1;
+        for (int j = 0; j < k; j++) {
+            int64_t q = nb[j];
+            if (!is_land(m, q) || is_impassable(m, q)) continue;
+            unsigned owner = owner_id(m, q);
+            if (owner == me) continue;
+            if (owner != 0 && seen[owner] != seen_stamp) {
+                seen[owner] = seen_stamp;
+                JS_SetPropertyUint32(ctx, out, n++, JS_NewInt32(ctx, (int32_t)owner));
+            }
+            if (owner == 0 && !(S(m, q) & (1 << 13))) tn = true;
+        }
+    }
+    JS_SetPropertyUint32(ctx, out, 0, JS_NewBool(ctx, tn));
+    return out;
+}
+
+// --- DetMath (engine-lib/src/DetMath.ts) ----------------------------------------------------
+// The same operations in the same order; this file is built with
+// -ffp-contract=off so no multiply-add is fused (which would change bits).
+
+static double det_pow2(double n) {
+    if (n > 1023) return INFINITY;
+    if (n < -1022) return 0;
+    uint64_t bits = (uint64_t)(uint32_t)(((int32_t)n + 1023) << 20) << 32;
+    double d;
+    memcpy(&d, &bits, sizeof d);
+    return d;
+}
+
+static double det_exp(double x) {
+    if (x > 709) return INFINITY;
+    if (x < -708) return 0;
+    const double LN2 = 0.6931471805599453, LOG2E = 1.4426950408889634;
+    double n = floor(x * LOG2E + 0.5);
+    double r = x - n * LN2;
+    double p = 1 + r * (1 + r * (1.0 / 2 + r * (1.0 / 6 + r * (1.0 / 24 + r * (1.0 / 120 + r * (1.0 / 720 + r * (1.0 / 5040 + r * (1.0 / 40320))))))));
+    return p * det_pow2(n);
+}
+
+static double det_log(double x) {
+    if (x <= 0) return x == 0 ? -INFINITY : NAN;
+    const double LN2 = 0.6931471805599453, SQRT2 = 1.4142135623730951;
+    double e = 0;
+    if (x < 2.2250738585072014e-308) {
+        x *= 18014398509481984.0;
+        e = -54;
+    }
+    uint64_t bits;
+    memcpy(&bits, &x, sizeof bits);
+    uint32_t hi = (uint32_t)(bits >> 32);
+    e += (double)((int32_t)((hi >> 20) & 0x7ff) - 1023);
+    hi = (hi & 0x000fffff) | 0x3ff00000;
+    bits = ((uint64_t)hi << 32) | (bits & 0xffffffffu);
+    double m;
+    memcpy(&m, &bits, sizeof m);
+    if (m > SQRT2) {
+        m *= 0.5;
+        e += 1;
+    }
+    double s = (m - 1) / (m + 1);
+    double z = s * s;
+    double series = 1 + z * (1.0 / 3 + z * (1.0 / 5 + z * (1.0 / 7 + z * (1.0 / 9 + z * (1.0 / 11 + z * (1.0 / 13))))));
+    return e * LN2 + 2 * s * series;
+}
+
+static JSValue js_det_exp(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    return JS_NewFloat64(ctx, det_exp(argc ? darg(ctx, argv[0]) : NAN));
+}
+
+static JSValue js_det_log(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    return JS_NewFloat64(ctx, det_log(argc ? darg(ctx, argv[0]) : NAN));
+}
+
+/**
+ * PlayerImpl.canAttack()'s unowned-tile case: whether the unowned passable
+ * land reachable from `tile` within `maxDist` (manhattan) touches a tile of
+ * `smallID` (the TS floods the whole region into a Set, then looks).
+ * unownedTouches(tile, smallID, maxDist) -> boolean
+ */
+static JSValue js_unowned_touches(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 3 || nmaps == 0) return JS_ThrowTypeError(ctx, "unownedTouches: bad arguments");
+    const NMap *m = &maps[0];
+    int64_t tile = iarg(ctx, argv[0]);
+    unsigned me = (unsigned)iarg(ctx, argv[1]);
+    int64_t max_dist = iarg(ctx, argv[2]);
+    static uint32_t *seen, stamp;
+    static int64_t seen_size, *stack, scap;
+    if (seen_size != m->size) {
+        free(seen);
+        seen = calloc((size_t)m->size, sizeof *seen);
+        seen_size = m->size;
+        stamp = 0;
+    }
+    if (++stamp == 0) memset(seen, 0, sizeof *seen * (size_t)seen_size), stamp = 1;
+    int64_t w = m->w, fx = xof(m, tile), fy = yof(m, tile), sp = 0;
+#define OK(t) ((t) >= 0 && (t) < m->size && owner_id(m, (t)) == 0 && is_land(m, (t)) && !is_impassable(m, (t)) && \
+               llabs(xof(m, (t)) - fx) + llabs(yof(m, (t)) - fy) <= max_dist)
+#define PUSH(t)                                                                  \
+    do {                                                                         \
+        if (sp == scap) {                                                        \
+            scap = scap ? scap * 2 : 4096;                                       \
+            stack = realloc(stack, sizeof *stack * (size_t)scap);                \
+        }                                                                        \
+        seen[t] = stamp;                                                         \
+        stack[sp++] = (t);                                                       \
+    } while (0)
+    if (OK(tile)) PUSH(tile);
+    while (sp > 0) {
+        int64_t t = stack[--sp], x = xof(m, t), nb[4];
+        int k = 0;
+        if (t >= w) nb[k++] = t - w;
+        if (t < (m->h - 1) * w) nb[k++] = t + w;
+        if (x != 0) nb[k++] = t - 1;
+        if (x != w - 1) nb[k++] = t + 1;
+        for (int j = 0; j < k; j++) {
+            if (owner_id(m, nb[j]) == me) return JS_TRUE;
+            if (seen[nb[j]] != stamp && OK(nb[j])) PUSH(nb[j]);
+        }
+    }
+#undef PUSH
+#undef OK
+    return JS_FALSE;
+}
+
 // --- Install ----------------------------------------------------------------------------
 
 static JSValue make_class(JSContext *ctx, JSClassID *id, const char *name, JSClassFinalizer *fin, JSClassGCMark *mark,
@@ -1288,6 +1901,18 @@ void native_install(JSContext *ctx) {
     JS_SetPropertyStr(ctx, n, "nameRect", JS_NewCFunction(ctx, js_name_rect, "nameRect", 6));
     JS_SetPropertyStr(ctx, n, "nextConquerTile", JS_NewCFunction(ctx, js_next_conquer_tile, "nextConquerTile", 4));
     JS_SetPropertyStr(ctx, n, "shoreNearest", JS_NewCFunction(ctx, js_shore_nearest, "shoreNearest", 6));
+    JS_SetPropertyStr(ctx, n, "astarBounded", JS_NewCFunction(ctx, js_astar_bounded, "astarBounded", 15));
+    JS_SetPropertyStr(ctx, n, "waterComponent", JS_NewCFunction(ctx, js_water_component, "waterComponent", 2));
+    JS_SetPropertyStr(ctx, n, "detExp", JS_NewCFunction(ctx, js_det_exp, "detExp", 1));
+    JS_SetPropertyStr(ctx, n, "detLog", JS_NewCFunction(ctx, js_det_log, "detLog", 1));
+    JS_SetPropertyStr(ctx, n, "unownedTouches", JS_NewCFunction(ctx, js_unowned_touches, "unownedTouches", 3));
+    JS_SetPropertyStr(ctx, n, "borderScan", JS_NewCFunction(ctx, js_border_scan, "borderScan", 2));
+    JS_SetPropertyStr(ctx, n, "nearbyIds", JS_NewCFunction(ctx, js_nearby_ids, "nearbyIds", 2));
+    JS_SetPropertyStr(ctx, n, "shoreScan", JS_NewCFunction(ctx, js_shore_scan, "shoreScan", 4));
+    JS_SetPropertyStr(ctx, n, "lakeScan", JS_NewCFunction(ctx, js_lake_scan, "lakeScan", 2));
+    atom_component_ids = JS_NewAtom(ctx, "componentIds");
+    atom_land_marker = JS_NewAtom(ctx, "landMarker");
+    atom_parents = JS_NewAtom(ctx, "parents");
     JS_SetPropertyStr(ctx, n, "updateBorders", JS_NewCFunction(ctx, js_update_borders, "updateBorders", 2));
     static const char *snames[4] = {"s0", "s1", "s2", "s3"};
     for (int i = 0; i < 4; i++) atom_s[i] = JS_NewAtom(ctx, snames[i]);

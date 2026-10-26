@@ -104,6 +104,8 @@ $(OUTPUT).elf	:	$(OFILES)
 
 # QuickJS is third-party code: keep its warnings out of our build log.
 quickjs.o libregexp.o libunicode.o dtoa.o: CFLAGS += -w
+# DetMath's exp/log must round like the TS: no fused multiply-add.
+native.o: CFLAGS += -ffp-contract=off
 
 -include $(DEPENDS)
 

@@ -51,8 +51,14 @@ static char root[256];
 static SDL_Texture *map_tex;
 static uint32_t *pixels;
 static int map_w, map_h;
-static int dirty_x0, dirty_y0, dirty_x1, dirty_y1;
+// Changed pixels go to the GPU in 64x64 chunks: one bounding box over the
+// whole frame's changes would often span the map (a 2904x1672 map is 19 MB).
+#define CHUNK 64
+static uint8_t *chunk_dirty;
+static int chunks_x, chunks_y;
 static uint16_t *coverage;  // owner of a defense post covering the tile, 0 none
+static uint16_t *coverage_old;
+static uint8_t *rel_prev;  // the relations the pixels were painted with
 static uint32_t coverage_hash;
 static int relations_version = -1;
 static int highlight;       // hovered owner
@@ -229,11 +235,33 @@ static uint32_t tile_color(const Snapshot *s, int x, int y) {
     return pack(tr / 255.0f * (1 - a) + f[0] * a, tg / 255.0f * (1 - a) + f[1] * a, tb / 255.0f * (1 - a) + f[2] * a);
 }
 
+/** Marks the pixels [x0, x1) x [y0, y1) for upload. */
 static void mark(int x0, int y0, int x1, int y1) {
-    if (x0 < dirty_x0) dirty_x0 = x0;
-    if (y0 < dirty_y0) dirty_y0 = y0;
-    if (x1 > dirty_x1) dirty_x1 = x1;
-    if (y1 > dirty_y1) dirty_y1 = y1;
+    if (x1 <= x0 || y1 <= y0) return;
+    int cx1 = (x1 - 1) / CHUNK, cy1 = (y1 - 1) / CHUNK;
+    for (int cy = y0 / CHUNK; cy <= cy1 && cy < chunks_y; cy++) {
+        for (int cx = x0 / CHUNK; cx <= cx1 && cx < chunks_x; cx++) chunk_dirty[cy * chunks_x + cx] = 1;
+    }
+}
+
+/** Uploads the marked chunks, a run of adjacent ones per call. */
+static void upload_dirty(void) {
+    for (int cy = 0; cy < chunks_y; cy++) {
+        for (int cx = 0; cx < chunks_x;) {
+            if (!chunk_dirty[cy * chunks_x + cx]) {
+                cx++;
+                continue;
+            }
+            int run = cx;
+            while (run < chunks_x && chunk_dirty[cy * chunks_x + run]) chunk_dirty[cy * chunks_x + run++] = 0;
+            int x = cx * CHUNK, y = cy * CHUNK;
+            int w = (run * CHUNK < map_w ? run * CHUNK : map_w) - x;
+            int h = (y + CHUNK < map_h ? y + CHUNK : map_h) - y;
+            SDL_Rect r = {x, y, w, h};
+            SDL_UpdateTexture(map_tex, &r, pixels + y * map_w + x, map_w * 4);
+            cx = run;
+        }
+    }
 }
 
 /** Recolours a tile and its 8 neighbours (borders depend on them). */
@@ -258,7 +286,9 @@ static bool update_coverage(const Snapshot *s) {
     }
     if (coverage && h == coverage_hash) return false;
     coverage_hash = h;
-    if (!coverage) coverage = malloc(sizeof(uint16_t) * (size_t)map_w * (size_t)map_h);
+    bool first = !coverage;
+    if (first) coverage = calloc((size_t)map_w * (size_t)map_h, sizeof(uint16_t));
+    else memcpy(coverage_old, coverage, sizeof(uint16_t) * (size_t)map_w * (size_t)map_h);
     memset(coverage, 0, sizeof(uint16_t) * (size_t)map_w * (size_t)map_h);
     const int r = DEFENSE_POST_RANGE;
     for (int i = 0; i < s->nunits; i++) {
@@ -274,7 +304,19 @@ static bool update_coverage(const Snapshot *s) {
             }
         }
     }
-    return true;
+    if (first) {
+        coverage_old = malloc(sizeof(uint16_t) * (size_t)map_w * (size_t)map_h);
+        return true;
+    }
+    // A tile's colour reads only its own coverage: repaint where it changed.
+    for (int i = 0; i < map_w * map_h; i++) {
+        if (coverage[i] != coverage_old[i]) {
+            int x = i % map_w, y = i / map_w;
+            pixels[i] = tile_color(s, x, y);
+            mark(x, y, x + 1, y + 1);
+        }
+    }
+    return false;
 }
 
 void map_reset(void) {
@@ -284,6 +326,13 @@ void map_reset(void) {
     pixels = NULL;
     free(coverage);
     coverage = NULL;
+    free(coverage_old);
+    coverage_old = NULL;
+    free(chunk_dirty);
+    chunk_dirty = NULL;
+    free(rel_prev);
+    rel_prev = NULL;
+    chunks_x = chunks_y = 0;
     coverage_hash = 0;
     relations_version = -1;
     highlight = 0;
@@ -313,6 +362,9 @@ void map_update(const Snapshot *s, int hover_owner) {
         map_tex = SDL_CreateTexture(gfx_renderer(), SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, map_w, map_h);
         SDL_SetTextureScaleMode(map_tex, SDL_ScaleModeNearest);
         pixels = malloc(sizeof(uint32_t) * (size_t)map_w * (size_t)map_h);
+        chunks_x = (map_w + CHUNK - 1) / CHUNK;
+        chunks_y = (map_h + CHUNK - 1) / CHUNK;
+        chunk_dirty = calloc((size_t)(chunks_x * chunks_y), 1);
         full = 1;
     }
     uint8_t old_src[sizeof pal_src];
@@ -320,15 +372,33 @@ void map_update(const Snapshot *s, int hover_owner) {
     build_palette(s);
     if (memcmp(old_src, pal_src, sizeof pal_src) != 0) full = 1;
     if (update_coverage(s)) full = 1;
+    // A changed relation recolours only its two players' tiles (their
+    // borders, and the alt view's affiliation colours).
+    static bool rel_affected[MAX_REL];
+    bool rel_changed = false;
     if (s->relations_version != relations_version) {
         relations_version = s->relations_version;
-        full = 1;
+        if (!rel_prev || !s->relations) {
+            full = 1;
+        } else {
+            memset(rel_affected, 0, sizeof rel_affected);
+            for (int a = 0; a < MAX_REL; a++) {
+                const uint8_t *now = &s->relations[a * MAX_REL], *was = &rel_prev[a * MAX_REL];
+                if (!memcmp(now, was, MAX_REL)) continue;
+                for (int b = 0; b < MAX_REL; b++) {
+                    if (now[b] != was[b]) rel_affected[a] = rel_affected[b] = rel_changed = true;
+                }
+            }
+        }
+        if (s->relations) {
+            if (!rel_prev) rel_prev = malloc(MAX_REL * MAX_REL);
+            memcpy(rel_prev, s->relations, MAX_REL * MAX_REL);
+        }
     }
     if (view_dirty) {
         view_dirty = false;
         full = 1;
     }
-    dirty_x0 = map_w, dirty_y0 = map_h, dirty_x1 = 0, dirty_y1 = 0;
     int old_hl = highlight;
     highlight = hover_owner;
     if (full) {
@@ -341,6 +411,18 @@ void map_update(const Snapshot *s, int hover_owner) {
             int ref = (int)refs[k];
             int x = ref % map_w, y = ref / map_w;
             if (y < map_h) touch_block(s, x, y);
+        }
+        if (rel_changed) {
+            for (int y = 0; y < map_h; y++) {
+                const uint16_t *row = &s->state[y * map_w];
+                for (int x = 0; x < map_w; x++) {
+                    int o = row[x] & OWNER_MASK;
+                    if (o != 0 && o < MAX_REL && rel_affected[o]) {
+                        pixels[y * map_w + x] = tile_color(s, x, y);
+                        mark(x, y, x + 1, y + 1);
+                    }
+                }
+            }
         }
         if (old_hl != highlight) {
             // Only the old and new hovered owners' tiles change.
@@ -357,10 +439,7 @@ void map_update(const Snapshot *s, int hover_owner) {
         }
     }
     free(refs);
-    if (dirty_x1 > dirty_x0 && dirty_y1 > dirty_y0) {
-        SDL_Rect r = {dirty_x0, dirty_y0, dirty_x1 - dirty_x0, dirty_y1 - dirty_y0};
-        SDL_UpdateTexture(map_tex, &r, pixels + dirty_y0 * map_w + dirty_x0, map_w * 4);
-    }
+    upload_dirty();
 }
 
 // --- Camera ---------------------------------------------------------------------------

@@ -253,15 +253,16 @@ function clickTile(a: { x: number; y: number }): string | null {
     return "spawn";
   }
   if (g.inSpawnPhase() || my === null || !my.isAlive()) return null;
-  const actions = S.runner!.playerActions(my.id(), a.x, a.y, [UnitType.TransportShip]);
   const troops = my.troops() * S.ui.attackRatio;
-  if (actions.canAttack) {
+  // playerActions().canAttack, without the boat route it also works out:
+  // that search only matters when a land attack is not possible.
+  if (my.canAttack(tile)) {
     const owner = g.owner(tile);
     S.pendingIntents.push({ type: "attack", targetID: owner.isPlayer() ? owner.id() : null, troops });
     return "attack";
   }
   // canAutoBoat(): land within 100 tiles of where the boat would launch.
-  const bu = actions.buildableUnits.find((b) => b.type === UnitType.TransportShip);
+  const bu = my.buildableUnits(tile, [UnitType.TransportShip]).find((b) => b.type === UnitType.TransportShip);
   const src = bu?.canBuild ?? false;
   if (g.isLand(tile) && src !== false && g.euclideanDistSquared(tile, src) < 100 * 100) {
     S.pendingIntents.push({ type: "boat", troops, dst: tile });

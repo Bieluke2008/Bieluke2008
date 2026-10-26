@@ -29,17 +29,20 @@ const esbuild = require("esbuild");
 
 const prelude = readFileSync(join(portDir, "prelude.js"), "utf8");
 
-// The engine's FlatBinaryHeap, TileSet and NameBoxCalculator imports go to js/native/, which
-// uses the host's native versions when present (src/native.c).
+// The engine's FlatBinaryHeap, TileSet, NameBoxCalculator, Util and DetMath imports
+// go to js/native/, which uses the host's native versions when present
+// (src/native.c).
 const redirects = new Map([
   [join(ofReal, "packages/engine-lib/src/game/TileSet.ts"), join(portDir, "native/TileSet.ts")],
   [join(ofReal, "packages/engine/src/execution/utils/FlatBinaryHeap.ts"), join(portDir, "native/FlatBinaryHeap.ts")],
   [join(ofReal, "packages/engine/src/game/NameBoxCalculator.ts"), join(portDir, "native/NameBoxCalculator.ts")],
+  [join(ofReal, "packages/engine-lib/src/Util.ts"), join(portDir, "native/Util.ts")],
+  [join(ofReal, "packages/engine-lib/src/DetMath.ts"), join(portDir, "native/DetMath.ts")],
 ]);
 const nativePlugin = {
   name: "switch-native",
   setup(build) {
-    build.onResolve({ filter: /(TileSet|FlatBinaryHeap|NameBoxCalculator)$/ }, async (args) => {
+    build.onResolve({ filter: /(TileSet|FlatBinaryHeap|NameBoxCalculator|Util|DetMath)$/ }, async (args) => {
       if (args.pluginData?.inner || args.importer.startsWith(join(portDir, "native"))) return undefined;
       const r = await build.resolve(args.path, {
         kind: args.kind,

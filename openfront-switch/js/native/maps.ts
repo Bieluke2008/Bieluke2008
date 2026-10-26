@@ -2,7 +2,7 @@
 // ownerID, neighbors4...) for the native ones of src/native.c, on the map
 // objects and on GameImpl, whose versions only delegate to its map.
 import { Game } from "@openfront/engine/game/Game";
-import { installKernels } from "./kernels";
+import { installKernels, setBoundMini } from "./kernels";
 
 const MAP_METHODS = [
   "isLand", "isImpassable", "isOcean", "isShoreline", "magnitude", "terrainByte", "ownerID", "hasOwner",
@@ -28,6 +28,7 @@ export function bindNativeMaps(game: Game): boolean {
   bind(main, main, MAP_METHODS);
   const mini = game.miniMap() as any;
   if (mini && mini !== main) bind(mini, mini, MAP_METHODS);
+  setBoundMini(mini && mini !== main ? mini : null);
   bind(game, main, GAME_METHODS);
   installKernels();
   return true;
