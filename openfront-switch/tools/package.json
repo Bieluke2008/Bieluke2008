@@ -1,0 +1,9 @@
+{
+  "name": "openfront-switch-tools",
+  "private": true,
+  "description": "Build-time asset tools: rasterizes OpenFront's SVG icons and flags, converts map thumbnails",
+  "dependencies": {
+    "@resvg/resvg-js": "2.6.2",
+    "sharp": "0.34.5"
+  }
+}

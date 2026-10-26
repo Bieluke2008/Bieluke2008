@@ -18,8 +18,8 @@ include $(DEVKITPRO)/libnx/switch_rules
 
 TARGET		:=	openfront
 BUILD		:=	build/switch
-SOURCES		:=	src deps/quickjs
-INCLUDES	:=	src deps/quickjs
+SOURCES		:=	src deps/quickjs deps/cjson
+INCLUDES	:=	src deps/quickjs deps/cjson
 ROMFS		:=	romfs
 ICON		:=	icon.jpg
 
@@ -35,7 +35,7 @@ QJS_CFILES	:=	quickjs.c libregexp.c libunicode.c dtoa.c
 #---------------------------------------------------------------------------------
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 
-CFLAGS	:=	`$(PREFIX)pkg-config --cflags sdl2 SDL2_ttf` -Wall -O2 -ffunction-sections \
+CFLAGS	:=	`$(PREFIX)pkg-config --cflags sdl2 SDL2_ttf SDL2_image` -Wall -O2 -ffunction-sections \
 			$(ARCH) $(DEFINES) -D_GNU_SOURCE
 
 CFLAGS	+=	$(INCLUDE) -D__SWITCH__
@@ -43,7 +43,7 @@ CFLAGS	+=	$(INCLUDE) -D__SWITCH__
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:=	`$(PREFIX)pkg-config --libs SDL2_ttf sdl2` -lz -lnx -lm
+LIBS	:=	`$(PREFIX)pkg-config --libs SDL2_image SDL2_ttf sdl2` -lz -lnx -lm
 
 LIBDIRS	:= $(PORTLIBS) $(LIBNX)
 
@@ -59,7 +59,7 @@ export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir))
 
 export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 
-CFILES		:=	$(notdir $(wildcard src/*.c)) $(QJS_CFILES)
+CFILES		:=	$(notdir $(wildcard src/*.c)) $(QJS_CFILES) cJSON.c
 
 export LD	:=	$(CXX)
 

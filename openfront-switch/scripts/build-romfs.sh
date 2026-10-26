@@ -7,4 +7,5 @@ rm -rf romfs
 mkdir -p romfs
 node scripts/build-bundle.mjs deps/openfront romfs/engine.js
 node scripts/prepare-romfs.mjs deps/openfront romfs "$@"
+node scripts/prepare-assets.mjs deps/openfront deps/inter romfs
 du -sh romfs

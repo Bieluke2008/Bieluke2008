@@ -24,14 +24,23 @@ jobs:
         with:
           node-version: 24
 
-      - name: Fetch OpenFront and QuickJS-ng
+      - name: Fetch OpenFront, QuickJS-ng, cJSON and fonts
         run: ./scripts/fetch-deps.sh
 
-      - name: Build romfs (engine bundle, maps, languages, fonts)
+      - name: Build romfs (engine bundle, maps, languages, icons, fonts)
         run: ./scripts/build-romfs.sh
 
       - name: Smoke test the engine bundle
         run: node scripts/node-host.mjs romfs/engine.js romfs britannia 300
+
+      - name: Build and run the desktop version (menu and a game screen)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev zlib1g-dev
+          cmake -S . -B build/desktop
+          cmake --build build/desktop -j"$(nproc)"
+          SDL_VIDEODRIVER=dummy ./build/desktop/openfront --autoplay faroeislands \
+            --frames 900 --scene radial --screenshot radial.bmp
 
       - name: Build openfront.nro (devkitA64)
         run: ./scripts/build-switch.sh

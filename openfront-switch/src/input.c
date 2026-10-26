@@ -11,6 +11,8 @@ static SDL_GameController *controller;
 #endif
 
 #define MAX_FINGERS 4
+#define DRAG_START 10.0f  // pixels before a press becomes a drag
+#define LONG_PRESS_MS 450
 
 typedef struct {
     SDL_FingerID id;
@@ -19,18 +21,23 @@ typedef struct {
     float sx, sy;      // where it went down
     Uint32 t0;
     bool dragged;
+    bool long_pressed;
 } Finger;
 
 static Finger fingers[MAX_FINGERS];
 static float pinch_dist;
+static bool pinching;
 #ifndef __SWITCH__
-static bool mouse_drag;
+static bool mouse_down;
+static float mouse_sx, mouse_sy;
+static bool mouse_dragged;
 #endif
 
 void input_init(void) {
 #ifdef __SWITCH__
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
     padInitializeDefault(&pad);
+    hidInitializeTouchScreen();
 #else
     for (int i = 0; i < SDL_NumJoysticks(); i++) {
         if (SDL_IsGameController(i)) {
@@ -82,16 +89,16 @@ static int active_fingers(Finger **a, Finger **b) {
 void input_poll(Input *in, int sw, int sh) {
     bool prev[BTN_COUNT];
     memcpy(prev, in->held, sizeof prev);
-    bool keep_quit = in->quit;
+    bool keep_quit = in->quit, keep_touch = in->touch, keep_down = in->down, keep_drag = in->dragging;
     float px = in->px, py = in->py;
     memset(in, 0, sizeof *in);
     in->quit = keep_quit;
+    in->touch = keep_touch;
+    in->down = keep_down;
+    in->dragging = keep_drag;
     in->px = px;
     in->py = py;
-
-#ifndef __SWITCH__
-    const Uint8 *k = SDL_GetKeyboardState(NULL);
-#endif
+    in->key_digit = -1;
 
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
@@ -104,11 +111,22 @@ void input_poll(Input *in, int sw, int sh) {
                 if (!f) break;
                 f->x = f->sx = e.tfinger.x * (float)sw;
                 f->y = f->sy = e.tfinger.y * (float)sh;
-                f->t0 = e.tfinger.timestamp;
+                f->t0 = SDL_GetTicks();
+                in->touch = true;
                 Finger *a = NULL, *b = NULL;
-                if (active_fingers(&a, &b) == 2) {
+                int n = active_fingers(&a, &b);
+                if (n == 1) {
+                    in->px = f->x, in->py = f->y;
+                    in->down = true;
+                    in->pressed_primary = true;
+                    in->dragging = false;
+                    in->moved = true;
+                } else if (n == 2) {
+                    // A second finger turns the gesture into a pinch.
                     pinch_dist = hypotf(a->x - b->x, a->y - b->y);
-                    a->dragged = b->dragged = true;  // no tap after a pinch
+                    pinching = true;
+                    a->dragged = b->dragged = true;
+                    in->dragging = true;
                 }
                 break;
             }
@@ -118,12 +136,17 @@ void input_poll(Input *in, int sw, int sh) {
                 float nx = e.tfinger.x * (float)sw, ny = e.tfinger.y * (float)sh;
                 Finger *a = NULL, *b = NULL;
                 int n = active_fingers(&a, &b);
-                if (n == 1) {
-                    if (hypotf(nx - f->sx, ny - f->sy) > 12) f->dragged = true;
-                    if (f->dragged) {
-                        in->pan_dx += nx - f->x;
-                        in->pan_dy += ny - f->y;
+                if (n == 1 && !pinching) {
+                    if (!f->dragged && hypotf(nx - f->sx, ny - f->sy) > DRAG_START) {
+                        f->dragged = true;
+                        in->dragging = true;
                     }
+                    if (f->dragged) {
+                        in->drag_dx += nx - f->x;
+                        in->drag_dy += ny - f->y;
+                    }
+                    in->px = nx, in->py = ny;
+                    in->moved = true;
                 }
                 f->x = nx;
                 f->y = ny;
@@ -131,18 +154,23 @@ void input_poll(Input *in, int sw, int sh) {
                     float d = hypotf(a->x - b->x, a->y - b->y);
                     if (pinch_dist > 0 && d > 0) in->zoom_steps += log2f(d / pinch_dist) * 4;
                     pinch_dist = d;
-                    in->pinch_x = (a->x + b->x) / 2;
-                    in->pinch_y = (a->y + b->y) / 2;
+                    in->zoom_x = (a->x + b->x) / 2;
+                    in->zoom_y = (a->y + b->y) / 2;
                 }
                 break;
             }
             case SDL_FINGERUP: {
                 Finger *f = finger(e.tfinger.fingerId, false);
                 if (!f) break;
-                if (!f->dragged && e.tfinger.timestamp - f->t0 < 500) {
-                    in->tap = true;
-                    in->px = f->x;
-                    in->py = f->y;
+                Finger *a = NULL, *b = NULL;
+                int n = active_fingers(&a, &b);
+                if (n == 1) {
+                    if (!f->dragged && !f->long_pressed && !pinching) {
+                        in->released_primary = true;
+                        in->px = f->x, in->py = f->y;
+                    }
+                    in->down = false;
+                    pinching = false;
                 }
                 f->active = false;
                 pinch_dist = 0;
@@ -151,29 +179,54 @@ void input_poll(Input *in, int sw, int sh) {
 #ifndef __SWITCH__
             case SDL_MOUSEMOTION:
                 if (e.motion.which == SDL_TOUCH_MOUSEID) break;
-                in->pointer_moved = true;
+                in->touch = false;
+                in->moved = true;
                 in->px = (float)e.motion.x;
                 in->py = (float)e.motion.y;
-                if (mouse_drag) {
-                    in->pan_dx += (float)e.motion.xrel;
-                    in->pan_dy += (float)e.motion.yrel;
+                if (mouse_down) {
+                    if (!mouse_dragged && hypotf(in->px - mouse_sx, in->py - mouse_sy) > 5) {
+                        mouse_dragged = true;
+                        in->dragging = true;
+                    }
+                    if (mouse_dragged) {
+                        in->drag_dx += (float)e.motion.xrel;
+                        in->drag_dy += (float)e.motion.yrel;
+                    }
                 }
                 break;
             case SDL_MOUSEBUTTONDOWN:
                 if (e.button.which == SDL_TOUCH_MOUSEID) break;
-                if (e.button.button == SDL_BUTTON_LEFT) in->tap = true;
-                if (e.button.button == SDL_BUTTON_RIGHT) in->secondary_tap = true;
-                if (e.button.button == SDL_BUTTON_MIDDLE) mouse_drag = true;
+                in->touch = false;
                 in->px = (float)e.button.x;
                 in->py = (float)e.button.y;
+                if (e.button.button == SDL_BUTTON_LEFT) {
+                    mouse_down = true;
+                    mouse_dragged = false;
+                    mouse_sx = in->px, mouse_sy = in->py;
+                    in->down = true;
+                    in->pressed_primary = true;
+                    in->dragging = false;
+                }
+                if (e.button.button == SDL_BUTTON_RIGHT) in->secondary = true;
                 break;
             case SDL_MOUSEBUTTONUP:
-                if (e.button.button == SDL_BUTTON_MIDDLE) mouse_drag = false;
+                if (e.button.which == SDL_TOUCH_MOUSEID) break;
+                if (e.button.button == SDL_BUTTON_LEFT) {
+                    if (!mouse_dragged) in->released_primary = true;
+                    mouse_down = false;
+                    in->down = false;
+                }
                 break;
             case SDL_MOUSEWHEEL:
                 in->zoom_steps += (float)e.wheel.y;
-                in->pinch_x = in->px;
-                in->pinch_y = in->py;
+                in->wheel += (float)e.wheel.y;
+                in->zoom_x = in->px;
+                in->zoom_y = in->py;
+                break;
+            case SDL_KEYDOWN:
+                if (!e.key.repeat && e.key.keysym.sym >= SDLK_0 && e.key.keysym.sym <= SDLK_9) {
+                    in->key_digit = e.key.keysym.sym - SDLK_0;
+                }
                 break;
             case SDL_CONTROLLERDEVICEADDED:
                 if (!controller) controller = SDL_GameControllerOpen(e.cdevice.which);
@@ -181,6 +234,17 @@ void input_poll(Input *in, int sw, int sh) {
 #endif
             default:
                 break;
+        }
+    }
+
+    // Long press: the touch screen's right click (radial menu).
+    for (int i = 0; i < MAX_FINGERS; i++) {
+        Finger *f = &fingers[i];
+        if (f->active && !f->dragged && !f->long_pressed && !pinching && SDL_GetTicks() - f->t0 >= LONG_PRESS_MS) {
+            f->long_pressed = true;
+            in->secondary = true;
+            in->px = f->x, in->py = f->y;
+            in->down = false;  // the press is spent
         }
     }
 
@@ -200,21 +264,22 @@ void input_poll(Input *in, int sw, int sh) {
     in->rx = dead((float)r.x / 32767.0f);
     in->ry = dead(-(float)r.y / 32767.0f);
 #else
+    const Uint8 *k = SDL_GetKeyboardState(NULL);
     in->held[BTN_A] = k[SDL_SCANCODE_RETURN] || k[SDL_SCANCODE_SPACE];
-    in->held[BTN_B] = k[SDL_SCANCODE_B] || k[SDL_SCANCODE_BACKSPACE];
+    in->held[BTN_B] = k[SDL_SCANCODE_ESCAPE] || k[SDL_SCANCODE_BACKSPACE];
     in->held[BTN_X] = k[SDL_SCANCODE_X];
-    in->held[BTN_Y] = k[SDL_SCANCODE_Y];
-    in->held[BTN_L] = k[SDL_SCANCODE_Q];
-    in->held[BTN_R] = k[SDL_SCANCODE_E];
-    in->held[BTN_ZL] = k[SDL_SCANCODE_Z] || k[SDL_SCANCODE_MINUS];
-    in->held[BTN_ZR] = k[SDL_SCANCODE_C] || k[SDL_SCANCODE_EQUALS];
-    in->held[BTN_PLUS] = k[SDL_SCANCODE_ESCAPE];
+    in->held[BTN_Y] = k[SDL_SCANCODE_B];
+    in->held[BTN_L] = k[SDL_SCANCODE_T];
+    in->held[BTN_R] = k[SDL_SCANCODE_Y];
+    in->held[BTN_ZL] = k[SDL_SCANCODE_Q] || k[SDL_SCANCODE_MINUS];
+    in->held[BTN_ZR] = k[SDL_SCANCODE_E] || k[SDL_SCANCODE_EQUALS];
+    in->held[BTN_PLUS] = k[SDL_SCANCODE_P];
     in->held[BTN_MINUS] = k[SDL_SCANCODE_TAB];
     in->held[BTN_UP] = k[SDL_SCANCODE_UP];
     in->held[BTN_DOWN] = k[SDL_SCANCODE_DOWN];
     in->held[BTN_LEFT] = k[SDL_SCANCODE_LEFT];
     in->held[BTN_RIGHT] = k[SDL_SCANCODE_RIGHT];
-    in->held[BTN_RSTICK] = k[SDL_SCANCODE_H];
+    in->held[BTN_RSTICK] = k[SDL_SCANCODE_C];
     in->rx = (float)(k[SDL_SCANCODE_D] - k[SDL_SCANCODE_A]);
     in->ry = (float)(k[SDL_SCANCODE_S] - k[SDL_SCANCODE_W]);
     if (controller) {

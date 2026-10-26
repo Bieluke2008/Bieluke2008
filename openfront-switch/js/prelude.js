@@ -36,6 +36,34 @@
       timeEnd: function () {},
     };
   }
+  // Client modules the port reuses (the theme, number formatting) touch these
+  // browser globals at load time; give them inert stand-ins.
+  if (typeof g.localStorage === "undefined") {
+    var store = {};
+    g.localStorage = {
+      getItem: function (k) {
+        return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null;
+      },
+      setItem: function (k, v) {
+        store[k] = String(v);
+      },
+      removeItem: function (k) {
+        delete store[k];
+      },
+      clear: function () {
+        store = {};
+      },
+    };
+  }
+  if (typeof g.addEventListener === "undefined") {
+    g.addEventListener = function () {};
+    g.removeEventListener = function () {};
+    g.dispatchEvent = function () {
+      return true;
+    };
+  }
+  if (typeof g.window === "undefined") g.window = g;
+  if (typeof g.navigator === "undefined") g.navigator = { userAgent: "NintendoSwitch", platform: "Switch", language: "en" };
   if (typeof g.performance === "undefined") {
     g.performance = { now: h.now };
   }

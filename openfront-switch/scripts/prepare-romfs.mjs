@@ -56,31 +56,14 @@ console.log(
 
 // --- Translations -----------------------------------------------------------
 
-// Only the sections the port shows; the full files are mostly web UI.
-const SECTIONS = [
-  "events_display",
-  "unit_type",
-  "heads_up_message",
-  "win_modal",
-  "map",
-  "difficulty",
-  "game_settings",
-  "player_panel",
-  "player_type",
-  "leaderboard",
-  "build_menu",
-  "common",
-  "main",
-];
+// The whole files: the HUD uses keys from most sections.
 const langOut = join(romfs, "lang");
 mkdirSync(langOut, { recursive: true });
 let langs = 0;
 for (const f of readdirSync(join(res, "lang"))) {
   if (!f.endsWith(".json") || f === "metadata.json") continue;
   const all = JSON.parse(readFileSync(join(res, "lang", f), "utf8"));
-  const picked = {};
-  for (const s of SECTIONS) if (all[s] !== undefined) picked[s] = all[s];
-  writeFileSync(join(langOut, f), JSON.stringify(picked));
+  writeFileSync(join(langOut, f), JSON.stringify(all));
   langs++;
 }
 console.log(`languages: ${langs}`);

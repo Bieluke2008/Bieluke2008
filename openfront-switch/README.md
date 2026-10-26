@@ -6,64 +6,104 @@ el juego de estrategia territorial en tiempo real, para Nintendo Switch.
 No es una versión web empaquetada: el **motor real de OpenFront** (la simulación
 determinista en TypeScript, sin cambios) se ejecuta dentro de
 [QuickJS-ng](https://github.com/quickjs-ng/quickjs) en una aplicación nativa
-hecha con libnx y SDL2, con renderizado, interfaz y controles propios para la
-consola.
+hecha con libnx y SDL2. La **interfaz es una copia de la de PC**, con sus
+medidas, colores, fuentes e iconos originales, adaptada a la pantalla táctil y
+al mando.
 
-![Partida en Britania](docs/game.png)
+![Partida en las Islas Feroe](docs/partida.png)
+
+| Menú radial (ataque, bombas) | Panel de jugador | Partida en solitario |
+| --- | --- | --- |
+| ![](docs/menu-radial.png) | ![](docs/panel-jugador.png) | ![](docs/solo.png) |
 
 ## Qué incluye
 
 - Partidas para un jugador contra **naciones** (IA) y **tribus** (bots), con
-  la misma lógica de juego que openfront.io: expansión, ataques, barcos de
-  transporte, alianzas, embargos, construcciones (ciudad, puerto, puesto de
-  defensa, fábrica, silo, SAM, barco de guerra) y bombas nucleares.
-- Los **135 mapas** de OpenFront (en tamaño "compacto").
-- Idioma automático según la consola, con las traducciones de OpenFront
-  (español, inglés y 40 más).
-- Controles con Joy-Con / Pro Controller y **pantalla táctil**.
-- Teclado del sistema para elegir tu nombre (por defecto, el de tu perfil).
+  la misma lógica de juego que openfront.io.
+- **La interfaz del cliente web**, redibujada en nativo con el diseño
+  medido del navegador (1280×720) y los recursos de OpenFront (iconos SVG,
+  banderas, atlas de unidades, estructuras, estados y emojis, fuentes Inter y
+  Overpass):
+  - Panel de control: tasa de tropas, barra de tropas, oro, porcentaje de
+    ataque con su deslizador y la barra de construcciones con atajos.
+  - Clasificación (ordenable, desplazable, con tu fila fijada), reloj,
+    velocidad de juego, pausa, menú y salir.
+  - **Menú radial** igual que en PC: información, alianza, barco, borrar
+    estructura, **construir** (ciudad, puerto, fábrica, puesto de defensa,
+    SAM, silo) y **mejorar varias veces de golpe** (×1…×máx), **atacar** con
+    bomba atómica, de hidrógeno y MIRV, donar oro/tropas, romper/extender
+    alianzas… con sus colores, tiempos de espera y descripciones.
+  - Vista previa al construir (fantasma, radio de alcance, coste) y
+    **trayectoria de los misiles** con las zonas interceptables por SAM.
+  - Tarjeta del jugador al pasar por encima, **panel de jugador** (objetivo,
+    embargo, alianzas, trayectoria de cohetes…), enviar oro/tropas, tabla de
+    emojis, chat rápido, notificaciones con botones (aceptar/rechazar
+    alianzas), ataques en curso con retirada/represalia, pantalla de victoria
+    o derrota.
+  - Mapa como el renderizador WebGL: relleno de territorio con su
+    saturación y transparencia, bordes con tinte de aliados/embargos, cuadros
+    de defensa, lluvia radiactiva, estructuras con sus formas e iconos y
+    niveles, unidades del atlas coloreadas por jugador, nombres con bandera,
+    iconos de estado y emoji, círculos de impacto de las bombas y la vista
+    alternativa «terreno/países».
+- Los **135 mapas** de OpenFront (en tamaño "compacto") con sus miniaturas.
+- Idioma automático según la consola, con las traducciones de OpenFront.
+- Controles con **pantalla táctil** y con Joy-Con / Pro Controller (cursor
+  virtual), ver abajo.
 
 ## Qué no incluye (todavía)
 
 - **Multijugador online.** Necesitaría el protocolo de los servidores de
   OpenFront (con su autenticación y antibots) y que la consola simule a la
-  velocidad exacta del servidor; la Switch probablemente no llega (ver
-  *Rendimiento*).
-- Sonido, cosméticos/skins, ferrocarriles dibujados, equipos, repeticiones y
-  partidas guardadas.
+  velocidad exacta del servidor.
+- Sonido, cosméticos/skins, vías de tren dibujadas, equipos, repeticiones,
+  partidas guardadas y la pantalla completa de ajustes (el botón «Ajustes» del
+  menú muestra los controles).
 
 ## Estado y rendimiento
 
 Probado: compilación del `.nro` con devkitA64, la versión de escritorio del
-mismo código (menús, partida completa, menús de construcción y de jugador) y
-los 135 mapas cargando y simulando. **No se ha probado en una Switch real.**
+mismo código (partidas completas y capturas de cada menú comparadas con el
+cliente web) y los 135 mapas. **No se ha probado en una Switch real.**
 
 QuickJS es un intérprete (sin JIT), así que el motor va más lento que en un
-navegador. En un Xeon a 2,8 GHz cada tick tarda ~50–65 ms con Britania y
-40–100 tribus (el juego web avanza 10 ticks por segundo, 100 ms por tick). La
-app activa el modo *boost* de CPU de la Switch (1785 MHz), pero aun así se
-espera que cada tick tarde entre 2 y 3 veces más. Cuando la simulación no llega,
-la partida avanza más despacio en lugar de dar tirones: el dibujado va en otro
-hilo. El HUD muestra lo que tarda cada tick («Motor … ms»). Para que vaya más
-fluido: mapas pequeños (Oceanía, Hawái, Islas Feroe, Japón…) y menos tribus.
+navegador: en un Xeon a 2,8 GHz cada tick tarda ~50–65 ms con Britania y
+40–100 tribus (el juego web avanza un tick cada 100 ms). La app activa el modo
+*boost* de CPU de la Switch (1785 MHz), pero aun así se espera que cada tick
+tarde entre 2 y 3 veces más. Cuando la simulación no llega, la partida avanza
+más despacio en lugar de dar tirones: el dibujado va en otro hilo. Para que
+vaya más fluido: mapas pequeños (Oceanía, Hawái, Islas Feroe, Japón…) y menos
+tribus.
 
 ## Controles
 
+Pantalla táctil (como el ratón en PC):
+
+| Gesto | Acción |
+| --- | --- |
+| Tocar | Clic: elegir inicio, atacar, colocar construcción, botones |
+| Mantener pulsado | Menú radial (clic derecho) |
+| Arrastrar | Mover el mapa · mover los deslizadores |
+| Pellizcar | Zoom |
+
+Mando (el stick izquierdo mueve un cursor, como un ratón):
+
 | Botón | Acción |
 | --- | --- |
-| Stick izquierdo | Mover el cursor (en el borde, desplaza el mapa) |
-| Stick derecho | Desplazar el mapa |
+| Stick izquierdo | Mover el cursor |
+| A | Clic |
+| X | Menú radial en el cursor |
+| Y | Ataque en barco hacia el cursor |
+| B | Atrás / cancelar (menús, construcción, buques seleccionados) |
+| L / R | Porcentaje de ataque −10 % / +10 % |
 | ZL / ZR | Alejar / acercar |
-| A | Elegir inicio · atacar o expandirte hacia la casilla (como el clic izquierdo) |
-| B | Enviar barco de transporte a la casilla |
-| X | Menú de construcción en la casilla |
-| Y | Menú del jugador de la casilla (alianza, objetivo, embargo, enviar tropas) |
-| L / R | Bajar / subir el % de tropas que se envían |
-| − | Aceptar peticiones de alianza |
-| Cruceta ↑ / clic stick derecho | Centrar la cámara en tu territorio |
-| Cruceta ↓ | Retirar el último ataque |
-| + | Pausa (continuar, alianzas, reiniciar, menú principal) |
-| Pantalla táctil | Toca = A · arrastra = mover · pellizca = zoom |
+| Stick derecho | Mover el mapa · pulsarlo: ir a tu territorio |
+| Cruceta ← / → | Elegir construcción o bomba en la barra |
+| Cruceta ↑ / ↓ | Mostrar clasificación / tabla de emojis |
+| + / − | Menú / pausa |
+
+Para mover buques de guerra: toca el agua junto a ellos (quedan rodeados por
+un círculo) y luego toca el destino.
 
 ## Instalar
 
@@ -80,12 +120,12 @@ Menu.
 ## Compilar
 
 Requisitos: Git, Node.js 24 y Docker (o devkitPro instalado con
-`switch-sdl2`, `switch-sdl2_ttf` y `switch-zlib`).
+`switch-sdl2`, `switch-sdl2_ttf`, `switch-sdl2_image` y `switch-zlib`).
 
 ```sh
 cd openfront-switch
-./scripts/fetch-deps.sh      # OpenFront (commit fijado) y QuickJS-ng
-./scripts/build-romfs.sh     # engine.js + mapas + idiomas + fuentes -> romfs/
+./scripts/fetch-deps.sh      # OpenFront (commit fijado), QuickJS-ng, cJSON, fuentes
+./scripts/build-romfs.sh     # engine.js + mapas + idiomas + iconos + fuentes -> romfs/
 ./scripts/build-switch.sh    # openfront.nro con la imagen devkitpro/devkita64
 ```
 
@@ -93,22 +133,26 @@ cd openfront-switch
 
 ### Versión de escritorio (para desarrollar)
 
-El mismo código compila para Linux/macOS con SDL2, SDL2_ttf y zlib:
+El mismo código compila para Linux/macOS con SDL2, SDL2_ttf, SDL2_image y
+zlib:
 
 ```sh
 cmake -B build/desktop && cmake --build build/desktop
 ./build/desktop/openfront --romfs romfs/
 ```
 
-Teclado y ratón: el ratón mueve el cursor, clic izquierdo = A, clic derecho =
-X, rueda = zoom, botón central arrastra el mapa, WASD desplaza, Q/E = L/R,
-Esc = +, Tab = −. `OPENFRONT_LANG=es` fuerza el idioma.
+Ratón y teclado como en PC (clic izquierdo, clic derecho = menú radial,
+arrastrar, rueda, teclas 1–0 para la barra de construcción); un mando de PC
+funciona como el de la Switch. `OPENFRONT_LANG=es` fuerza el idioma.
 
-Prueba automática sin ventana (usada para las capturas):
+Prueba automática sin ventana (usada para las capturas): juega sola y, antes
+de la captura, abre la escena pedida (`radial`, `build`, `attack`, `hover`,
+`panel`, `self`, `send`, `emoji`, `chat`, `settings`, `exit`, `ghost`, `help`,
+`menu`):
 
 ```sh
 SDL_VIDEODRIVER=dummy ./build/desktop/openfront --romfs romfs/ \
-  --autoplay britannia --frames 4000 --screenshot partida.bmp
+  --autoplay faroeislands --frames 1500 --scene radial --screenshot radial.bmp
 ```
 
 Y para probar solo el motor con Node:
@@ -126,19 +170,29 @@ Y para probar solo el motor con Node:
 └────────────────────────────────────────┘   └───────────────────────────────────────┘
 ```
 
-- `js/adapter.ts` sustituye al Web Worker y al servidor local del cliente web:
-  crea la partida (`createGameRunner`), mete los *intents* del jugador en cada
-  turno y expone a C el HUD, los nombres, las unidades y las casillas
-  cambiadas. Se empaqueta con esbuild junto al motor en `romfs/engine.js`.
-- `src/engine.c` ejecuta QuickJS en su propio hilo, con una cola de comandos
-  y una "foto" del estado protegida por mutex.
-- `src/render.c` mantiene una textura del mapa (una píxel por casilla) y solo
-  recalcula las casillas que cambian; colores del terreno iguales a los del
-  cliente web.
-- `src/text.c` dibuja el texto desde un atlas de glifos (Overpass, la fuente
-  de OpenFront, y la fuente del sistema de la Switch para otros alfabetos).
-- `scripts/prepare-romfs.mjs` copia de OpenFront los mapas (comprimidos), las
-  traducciones necesarias y convierte la fuente WOFF a TTF.
+- `js/` sustituye al Web Worker, al servidor local y a los controladores
+  de la interfaz del cliente web: `adapter.ts` crea la partida
+  (`createGameRunner`) y mete los *intents* del jugador en cada turno;
+  `hud.ts`, `radial.ts`, `panel.ts`, `build.ts` y `events.ts` son ports de
+  `ControlPanel`, `UnitDisplay`, la clasificación, `RadialMenuElements`,
+  `PlayerInfoOverlay`, `PlayerPanel`, `BuildPreviewController` y
+  `EventsDisplay`, con la misma lógica (qué se puede construir, mejorar o
+  lanzar, costes, enfriamientos, textos). Se empaquetan con esbuild junto al
+  motor en `romfs/engine.js` y hablan con C por JSON.
+- `src/engine.c` ejecuta QuickJS en su propio hilo y responde a las llamadas
+  del hilo de dibujado.
+- `src/gfx.c` y `src/ui.c`: formas con esquinas redondeadas, iconos,
+  banderas, emojis y texto (Inter, DejaVu Sans Mono, Overpass) en
+  coordenadas de una página de 1280×720 escalada a la pantalla, y botones con
+  el orden de superposición del DOM.
+- `src/map.c`: el mapa según los *shaders* del cliente (`TerritoryPass`,
+  `BorderStampPass`, `StructurePass`, `UnitPass`, `NamePass`…), con los
+  valores de `render-settings.json`.
+- `src/hud.c`, `src/radial.c`, `src/menus.c`, `src/solo.c`: los elementos
+  de la interfaz web, con las medidas tomadas del cliente real en un
+  navegador.
+- `scripts/prepare-assets.mjs` rasteriza los iconos y banderas SVG de
+  OpenFront, copia sus atlas y convierte las miniaturas de los mapas.
 
 La versión de OpenFront está fijada en `scripts/fetch-deps.sh`. Al
 actualizarla, hay que revisar el adaptador: usa piezas internas del motor
@@ -148,9 +202,11 @@ actualizarla, hay que revisar el adaptador: usa piezas internas del motor
 
 - Código: **AGPL-3.0** (ver `LICENSE`), como OpenFront, del que deriva.
 - OpenFront © OpenFront Inc. y colaboradores —
-  <https://github.com/openfrontio/OpenFrontIO>. Mapas, traducciones, fuente
-  e icono provienen de su carpeta `resources/` (CC BY-SA 4.0, atribución
-  «OpenFront»). No se usa nada de su carpeta `proprietary/`.
-- QuickJS-ng (MIT), SDL2 y SDL2_ttf (zlib), libnx (ISC).
+  <https://github.com/openfrontio/OpenFrontIO>. Mapas, miniaturas,
+  traducciones, iconos, banderas, atlas y la fuente Overpass provienen de su
+  carpeta `resources/` (CC BY-SA 4.0, atribución «OpenFront»). No se usa nada de su carpeta `proprietary/`.
+- QuickJS-ng (MIT), cJSON (MIT), SDL2, SDL2_ttf y SDL2_image (zlib), libnx
+  (ISC), Inter (OFL), DejaVu Sans Mono (licencia de Bitstream Vera), y unos
+  pocos emojis de Noto Color Emoji (OFL) en `assets/ui-emoji.png`.
 
 Este port no está afiliado ni respaldado por OpenFront Inc. ni por Nintendo.

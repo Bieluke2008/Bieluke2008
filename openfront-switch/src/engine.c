@@ -8,31 +8,43 @@
 
 #include "quickjs.h"
 
-#define MAX_CMDS 256
-#define MAX_MSGS 64
-#define MAX_STRINGS 256
+#define MAX_CALLS 256
+#define MAX_RESULTS 64
+#define MAX_STRINGS 512
+
+typedef struct {
+    int id;  // 0 = result not wanted
+    char method[32];
+    char *args;
+} Call;
+
+typedef struct {
+    int id;
+    char *json;
+} Result;
 
 // --- Shared state (guarded by the mutexes noted) ------------------------------
 
 static SDL_Thread *thread;
-static SDL_mutex *cmd_lock;  // cmds, speed, paused, quit
+static SDL_mutex *cmd_lock;  // calls, start/stop requests, speed, paused, quit
 static SDL_cond *cmd_cond;
-static Cmd cmds[MAX_CMDS];
-static int ncmds;
+static Call calls[MAX_CALLS];
+static int ncalls;
+static bool start_requested, stop_requested;
+static StartOptions start_opts;
 static double speed = 1.0;
 static bool paused;
 static bool quit;
+static int next_call_id;
 
-static SDL_mutex *snap_lock;  // snap, names, dirty, msgs, menu
+static SDL_mutex *snap_lock;  // snap, players, dirty, results
 static Snapshot snap;
-static char names[MAX_PLAYERS][NAME_LEN];
+static PlayerInfo players[MAX_PLAYERS];
 static uint32_t *dirty;
 static int ndirty, dirty_cap;
 static int full_redraw;
-static Msg msgs[MAX_MSGS];
-static int msg_head, msg_count;
-static MenuResult menu;
-static int seq_counter;
+static Result results[MAX_RESULTS];
+static int labels_cap, units_cap;
 
 // Written once by the engine thread before engine_init returns.
 static MapList maps;
@@ -55,8 +67,7 @@ static bool running;
 // --- Host functions -------------------------------------------------------------
 
 static double now_ms(void) {
-    return (double)SDL_GetPerformanceCounter() * 1000.0 /
-           (double)SDL_GetPerformanceFrequency();
+    return (double)SDL_GetPerformanceCounter() * 1000.0 / (double)SDL_GetPerformanceFrequency();
 }
 
 /** Reads a whole file, or `path`.gz decompressed when only that exists. */
@@ -139,15 +150,19 @@ static JSValue js_read_file(JSContext *c, JSValueConst this_val, int argc, JSVal
 
 // --- JS helpers -----------------------------------------------------------------
 
+static void set_error(const char *msg) {
+    SDL_LockMutex(snap_lock);
+    snprintf(snap.error, sizeof snap.error, "%s", msg);
+    SDL_UnlockMutex(snap_lock);
+}
+
 static void dump_exception(void) {
     JSValue e = JS_GetException(ctx);
     const char *s = JS_ToCString(ctx, e);
     JSValue stack = JS_GetPropertyStr(ctx, e, "stack");
     const char *st = JS_IsUndefined(stack) ? NULL : JS_ToCString(ctx, stack);
     fprintf(stderr, "JS exception: %s\n%s\n", s ? s : "?", st ? st : "");
-    SDL_LockMutex(snap_lock);
-    snprintf(snap.error, sizeof snap.error, "%s", s ? s : "JS exception");
-    SDL_UnlockMutex(snap_lock);
+    set_error(s ? s : "JS exception");
     if (st) JS_FreeCString(ctx, st);
     if (s) JS_FreeCString(ctx, s);
     JS_FreeValue(ctx, stack);
@@ -160,7 +175,7 @@ static void run_jobs(void) {
     }
 }
 
-/** Calls OF[name](...args); returns the result (caller frees) or JS_EXCEPTION. */
+/** Calls OF[name](...args) (args are freed); the caller frees the result. */
 static JSValue call(const char *name, int argc, JSValue *argv) {
     JSValue fn = JS_GetPropertyStr(ctx, of_obj, name);
     JSValue r = JS_Call(ctx, fn, of_obj, argc, argv);
@@ -171,54 +186,33 @@ static JSValue call(const char *name, int argc, JSValue *argv) {
     return r;
 }
 
-static void call_void(const char *name, int argc, JSValue *argv) {
-    JS_FreeValue(ctx, call(name, argc, argv));
-}
+static void call_void(const char *name, int argc, JSValue *argv) { JS_FreeValue(ctx, call(name, argc, argv)); }
 
-static double get_num(JSValueConst obj, const char *prop) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    double d = 0;
-    JS_ToFloat64(ctx, &d, v);
-    JS_FreeValue(ctx, v);
-    return d;
-}
-
-static bool get_bool(JSValueConst obj, const char *prop) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    bool b = JS_ToBool(ctx, v);
-    JS_FreeValue(ctx, v);
-    return b;
-}
-
-static void get_str(JSValueConst obj, const char *prop, char *out, size_t n) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    out[0] = 0;
-    if (!JS_IsNull(v) && !JS_IsUndefined(v)) {
-        const char *s = JS_ToCString(ctx, v);
-        if (s) {
-            snprintf(out, n, "%s", s);
-            JS_FreeCString(ctx, s);
-        }
-    }
-    JS_FreeValue(ctx, v);
-}
-
-static void to_str(JSValueConst v, char *out, size_t n) {
-    out[0] = 0;
+static char *to_cstr(JSValueConst v) {
+    if (JS_IsNull(v) || JS_IsUndefined(v) || JS_IsException(v)) return NULL;
     const char *s = JS_ToCString(ctx, v);
+    char *out = s ? strdup(s) : NULL;
+    if (s) JS_FreeCString(ctx, s);
+    return out;
+}
+
+static void to_buf(JSValueConst v, char *out, size_t n) {
+    out[0] = 0;
+    char *s = to_cstr(v);
     if (s) {
         snprintf(out, n, "%s", s);
-        JS_FreeCString(ctx, s);
+        free(s);
     }
 }
 
 /** Data pointer and element count of a typed array result. */
 static const void *typed_data(JSValueConst ta, size_t *count, size_t elem) {
     size_t off = 0, len = 0, bpe = 0, size = 0;
+    *count = 0;
+    if (JS_IsException(ta)) return NULL;
     JSValue ab = JS_GetTypedArrayBuffer(ctx, ta, &off, &len, &bpe);
     if (JS_IsException(ab)) {
         dump_exception();
-        *count = 0;
         return NULL;
     }
     uint8_t *p = JS_GetArrayBuffer(ctx, &size, ab);
@@ -233,18 +227,16 @@ static int64_t array_len(JSValueConst arr) {
     return n;
 }
 
-// --- Game -----------------------------------------------------------------------
-
-static void push_msg(const char *text, int kind) {
-    int i = (msg_head + msg_count) % MAX_MSGS;
-    if (msg_count == MAX_MSGS) {
-        msg_head = (msg_head + 1) % MAX_MSGS;
-        msg_count--;
-    }
-    snprintf(msgs[i].text, sizeof msgs[i].text, "%s", text);
-    msgs[i].kind = kind;
-    msg_count++;
+/** OF.call(method, args) -> JSON string (malloc'd). */
+static char *rpc(const char *method, const char *args) {
+    JSValue argv[2] = {JS_NewString(ctx, method), JS_NewString(ctx, args ? args : "")};
+    JSValue r = call("call", 2, argv);
+    char *s = to_cstr(r);
+    JS_FreeValue(ctx, r);
+    return s ? s : strdup("null");
 }
+
+// --- Game -----------------------------------------------------------------------
 
 static void release_game(void) {
     for (int i = 0; i < 3; i++) {
@@ -253,25 +245,27 @@ static void release_game(void) {
     }
 }
 
-static const void *buffer_of(const char *fn, int slot, size_t *size) {
+static const void *buffer_of(const char *fn, int slot) {
+    size_t size = 0;
     JSValue ab = call(fn, 0, NULL);
     game_buffers[slot] = ab;
-    return JS_GetArrayBuffer(ctx, size, ab);
+    return JS_GetArrayBuffer(ctx, &size, ab);
+}
+
+static int get_int(const char *fn) {
+    JSValue v = call(fn, 0, NULL);
+    int n = 0;
+    JS_ToInt32(ctx, &n, v);
+    JS_FreeValue(ctx, v);
+    return n;
 }
 
 /** Called once the game exists: hands the render thread the tile arrays. */
 static void attach_game(void) {
-    size_t tsize = 0, ssize = 0, csize = 0;
-    JSValue w = call("width", 0, NULL), h = call("height", 0, NULL);
-    int width = 0, height = 0;
-    JS_ToInt32(ctx, &width, w);
-    JS_ToInt32(ctx, &height, h);
-    JS_FreeValue(ctx, w);
-    JS_FreeValue(ctx, h);
-    const uint8_t *terrain = buffer_of("terrainBuffer", 0, &tsize);
-    const uint16_t *state = buffer_of("stateBuffer", 1, &ssize);
-    const uint8_t *colors = buffer_of("colors", 2, &csize);
-
+    int width = get_int("width"), height = get_int("height");
+    const uint8_t *terrain = buffer_of("terrainBuffer", 0);
+    const uint16_t *state = buffer_of("stateBuffer", 1);
+    const uint8_t *colors = buffer_of("colors", 2);
     SDL_LockMutex(snap_lock);
     snap.width = width;
     snap.height = height;
@@ -282,269 +276,226 @@ static void attach_game(void) {
     snap.tick = 0;
     full_redraw = 1;
     ndirty = 0;
-    memset(names, 0, sizeof names);
+    memset(players, 0, sizeof players);
     SDL_UnlockMutex(snap_lock);
 }
 
+/** Copies a JSON string value for `key` out of a flat object. */
+static void json_str(const char *json, const char *key, char *out, size_t n) {
+    char pat[40];
+    snprintf(pat, sizeof pat, "\"%s\":\"", key);
+    out[0] = 0;
+    const char *p = strstr(json, pat);
+    if (!p) return;
+    p += strlen(pat);
+    size_t k = 0;
+    while (*p && *p != '"' && k < n - 1) {
+        if (*p == '\\' && p[1]) {
+            p++;
+            if (*p == 'u' && p[1] && p[2] && p[3] && p[4]) {
+                // \uXXXX: re-encode as UTF-8 (BMP only).
+                unsigned cp = (unsigned)strtol((char[5]){p[1], p[2], p[3], p[4], 0}, NULL, 16);
+                p += 5;
+                if (cp < 0x80 && k + 1 < n) out[k++] = (char)cp;
+                else if (cp < 0x800 && k + 2 < n) {
+                    out[k++] = (char)(0xc0 | (cp >> 6));
+                    out[k++] = (char)(0x80 | (cp & 63));
+                } else if (k + 3 < n) {
+                    out[k++] = (char)(0xe0 | (cp >> 12));
+                    out[k++] = (char)(0x80 | ((cp >> 6) & 63));
+                    out[k++] = (char)(0x80 | (cp & 63));
+                }
+                continue;
+            }
+        }
+        out[k++] = *p++;
+    }
+    out[k] = 0;
+}
+
+/** Fetches names and flags of players the renderer has not seen yet. */
+static void learn_players(const double *ld, size_t nl) {
+    for (size_t i = 0; ld && i + 6 < nl; i += 7) {
+        int id = (int)ld[i];
+        if (id < 0 || id >= MAX_PLAYERS || players[id].known) continue;
+        char args[32];
+        snprintf(args, sizeof args, "{\"sid\":%d}", id);
+        char *json = rpc("playerInfo", args);
+        PlayerInfo pi = {0};
+        pi.known = true;
+        json_str(json, "name", pi.name, sizeof pi.name);
+        json_str(json, "flag", pi.flag, sizeof pi.flag);
+        pi.type = strstr(json, "\"NATION\"") ? 1 : strstr(json, "\"BOT\"") ? 2 : 0;
+        free(json);
+        SDL_LockMutex(snap_lock);
+        players[id] = pi;
+        SDL_UnlockMutex(snap_lock);
+    }
+}
+
+static void refresh_relations(void) {
+    static uint8_t *rel;
+    char *json = rpc("relations", "{}");
+    uint8_t *fresh = calloc(MAX_REL * MAX_REL, 1);
+    // Flat [a, b, r, a, b, r, ...]
+    const char *p = json;
+    int v[3], k = 0;
+    while (*p) {
+        if (*p >= '0' && *p <= '9') {
+            char *end;
+            v[k++] = (int)strtol(p, &end, 10);
+            p = end;
+            if (k == 3) {
+                if (v[0] < MAX_REL && v[1] < MAX_REL) {
+                    uint8_t *a = &fresh[v[0] * MAX_REL + v[1]], *b = &fresh[v[1] * MAX_REL + v[0]];
+                    // Embargo overrides friendly, both ways (RelationMatrix.ts).
+                    if (v[2] > *a) *a = (uint8_t)v[2];
+                    if (v[2] > *b) *b = (uint8_t)v[2];
+                }
+                k = 0;
+            }
+            continue;
+        }
+        p++;
+    }
+    free(json);
+    SDL_LockMutex(snap_lock);
+    bool changed = !rel || memcmp(rel, fresh, MAX_REL * MAX_REL) != 0;
+    if (changed) {
+        free(rel);
+        rel = fresh;
+        snap.relations = rel;
+        snap.relations_version++;
+    }
+    SDL_UnlockMutex(snap_lock);
+    if (!changed) free(fresh);
+}
+
 static void refresh_snapshot(double tick_ms) {
-    JSValue hud = call("hud", 0, NULL);
     JSValue labels = call("labels", 0, NULL);
     JSValue units = call("units", 0, NULL);
     JSValue tiles = call("tileUpdates", 0, NULL);
-    JSValue messages = call("messages", 0, NULL);
+    JSValue frame = call("frame", 0, NULL);
+    char *frame_json = to_cstr(frame);
 
-    // Names for new labels: they never change, so fetch each only once.
     size_t nl = 0;
     const double *ld = typed_data(labels, &nl, sizeof(double));
-    for (size_t i = 0; ld && i + 4 < nl; i += 5) {
-        int id = (int)ld[i];
-        if (id >= 0 && id < MAX_PLAYERS && names[id][0] == 0) {
-            JSValue arg = JS_NewInt32(ctx, id);
-            JSValue r = call("playerName", 1, &arg);
-            char tmp[NAME_LEN];
-            to_str(r, tmp, sizeof tmp);
-            JS_FreeValue(ctx, r);
-            SDL_LockMutex(snap_lock);
-            memcpy(names[id], tmp, NAME_LEN);
-            SDL_UnlockMutex(snap_lock);
-        }
-    }
-    JSValue leaders = JS_GetPropertyStr(ctx, hud, "leaders");
-    int64_t nlead = array_len(leaders);
-    int64_t nmsg = array_len(messages);
+    learn_players(ld, nl);
 
-    SDL_LockMutex(snap_lock);
-    snap.tick = (int)get_num(hud, "tick");
-    snap.seconds = get_num(hud, "seconds");
-    snap.spawn_phase = get_bool(hud, "spawn");
-    snap.spawned = get_bool(hud, "spawned");
-    snap.alive = get_bool(hud, "alive");
-    snap.me = (int)get_num(hud, "me");
-    snap.troops = get_num(hud, "troops");
-    snap.max_troops = get_num(hud, "maxTroops");
-    snap.gold = get_num(hud, "gold");
-    snap.tiles = (int)get_num(hud, "tiles");
-    snap.pct = get_num(hud, "pct");
-    snap.attacks = (int)get_num(hud, "attacks");
-    snap.ratio = get_num(hud, "ratio");
-    snap.pending_alliances = (int)get_num(hud, "pendingAlliances");
-    get_str(hud, "winner", snap.winner, sizeof snap.winner);
-    snap.tick_ms = tick_ms;
-    snap.nleaders = 0;
-    for (int64_t i = 0; i < nlead && i < MAX_LEADERS; i++) {
-        JSValue l = JS_GetPropertyUint32(ctx, leaders, (uint32_t)i);
-        Leader *ld2 = &snap.leaders[snap.nleaders++];
-        ld2->id = (int)get_num(l, "id");
-        ld2->pct = get_num(l, "pct");
-        get_str(l, "name", ld2->name, sizeof ld2->name);
-        JS_FreeValue(ctx, l);
+    int tick = 0;
+    if (frame_json) {
+        const char *t = strstr(frame_json, "\"tick\":");
+        if (t) tick = atoi(t + 7);
     }
-
-    snap.nlabels = 0;
-    for (size_t i = 0; ld && i + 4 < nl && snap.nlabels < MAX_PLAYERS; i += 5) {
-        Label *l = &snap.labels[snap.nlabels++];
-        l->id = (int)ld[i];
-        l->x = (float)ld[i + 1];
-        l->y = (float)ld[i + 2];
-        l->size = (float)ld[i + 3];
-        l->troops = ld[i + 4];
-    }
+    if (tick % 10 == 1) refresh_relations();
 
     size_t nu = 0;
     const int32_t *ud = typed_data(units, &nu, sizeof(int32_t));
-    int count = (int)(nu / 5);
-    if (count > snap.units_cap) {
-        snap.units_cap = count * 2;
-        snap.units = realloc(snap.units, sizeof(UnitRec) * (size_t)snap.units_cap);
+    size_t tsize = 0;
+    const uint8_t *tp = JS_IsException(tiles) ? NULL : JS_GetArrayBuffer(ctx, &tsize, tiles);
+    size_t ntu = tp ? tsize / 8 : 0;
+
+    SDL_LockMutex(snap_lock);
+    snap.tick = tick;
+    snap.tick_ms = tick_ms;
+    int count = (int)(nl / 7);
+    if (count > labels_cap) {
+        labels_cap = count * 2 + 16;
+        snap.labels = realloc(snap.labels, sizeof(Label) * (size_t)labels_cap);
+    }
+    snap.nlabels = ld ? count : 0;
+    for (int i = 0; i < snap.nlabels; i++) {
+        const double *r = ld + i * 7;
+        snap.labels[i] = (Label){(int)r[0], (float)r[1], (float)r[2], (float)r[3], r[4], (int)r[5], (int)r[6]};
+    }
+    count = (int)(nu / 9);
+    if (count > units_cap) {
+        units_cap = count * 2 + 16;
+        snap.units = realloc(snap.units, sizeof(UnitRec) * (size_t)units_cap);
     }
     snap.nunits = ud ? count : 0;
-    if (ud) memcpy(snap.units, ud, sizeof(UnitRec) * (size_t)snap.nunits);
-
-    size_t ntu = 0, tsize = 0;
-    const uint8_t *tp = JS_GetArrayBuffer(ctx, &tsize, tiles);
-    ntu = tp ? tsize / 8 : 0;
+    if (ud && snap.nunits) memcpy(snap.units, ud, sizeof(UnitRec) * (size_t)snap.nunits);
     if (ndirty + (int)ntu > dirty_cap) {
         dirty_cap = (ndirty + (int)ntu) * 2 + 1024;
         dirty = realloc(dirty, sizeof(uint32_t) * (size_t)dirty_cap);
     }
-    for (size_t i = 0; i < ntu; i++) {
-        uint32_t ref;
-        memcpy(&ref, tp + i * 8, 4);
-        dirty[ndirty++] = ref;
-    }
-
-    for (int64_t i = 0; i < nmsg; i++) {
-        JSValue m = JS_GetPropertyUint32(ctx, messages, (uint32_t)i);
-        char text[160];
-        get_str(m, "text", text, sizeof text);
-        push_msg(text, (int)get_num(m, "kind"));
-        JS_FreeValue(ctx, m);
+    for (size_t i = 0; i < ntu; i++) memcpy(&dirty[ndirty++], tp + i * 8, 4);
+    if (frame_json) {
+        free(snap.frame);
+        snap.frame = frame_json;
+        snap.frame_version++;
     }
     SDL_UnlockMutex(snap_lock);
 
-    JS_FreeValue(ctx, leaders);
-    JS_FreeValue(ctx, hud);
     JS_FreeValue(ctx, labels);
     JS_FreeValue(ctx, units);
     JS_FreeValue(ctx, tiles);
-    JS_FreeValue(ctx, messages);
+    JS_FreeValue(ctx, frame);
 }
 
-static void menu_from_build(JSValueConst list, int seq, int x, int y) {
-    MenuResult r;
-    memset(&r, 0, sizeof r);
-    r.kind = MENU_BUILD;
-    r.seq = seq;
-    r.x = x;
-    r.y = y;
-    int64_t n = array_len(list);
-    for (int64_t i = 0; i < n && r.count < MAX_MENU; i++) {
-        JSValue it = JS_GetPropertyUint32(ctx, list, (uint32_t)i);
-        MenuItem *m = &r.items[r.count++];
-        m->kind = (int)get_num(it, "kind");
-        m->cost = get_num(it, "cost");
-        m->enabled = get_bool(it, "canBuild");
-        get_str(it, "name", m->name, sizeof m->name);
-        JS_FreeValue(ctx, it);
-    }
+static void do_start(const StartOptions *o) {
     SDL_LockMutex(snap_lock);
-    menu = r;
+    snap.status = GAME_LOADING;
+    snap.error[0] = 0;
+    snap.terrain = NULL;
+    snap.state = NULL;
+    snap.colors = NULL;
+    snap.nlabels = snap.nunits = 0;
+    free(snap.frame);
+    snap.frame = NULL;
     SDL_UnlockMutex(snap_lock);
-}
+    // Only now that the render thread can no longer see them.
+    release_game();
 
-static void menu_from_player(JSValueConst p, int seq, int x, int y) {
-    MenuResult r;
-    memset(&r, 0, sizeof r);
-    r.kind = MENU_PLAYER;
-    r.seq = seq;
-    r.x = x;
-    r.y = y;
-    if (JS_IsNull(p) || JS_IsException(p)) {
-        r.player = -1;
+    JSValue opts = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, opts, "map", JS_NewInt32(ctx, o->map));
+    JS_SetPropertyStr(ctx, opts, "difficulty", JS_NewInt32(ctx, o->difficulty));
+    JS_SetPropertyStr(ctx, opts, "bots", JS_NewInt32(ctx, o->bots));
+    JS_SetPropertyStr(ctx, opts, "nations", JS_NewInt32(ctx, o->nations));
+    JS_SetPropertyStr(ctx, opts, "name", JS_NewString(ctx, o->name));
+    JS_SetPropertyStr(ctx, opts, "instantBuild", JS_NewBool(ctx, o->instant_build));
+    JS_SetPropertyStr(ctx, opts, "infiniteGold", JS_NewBool(ctx, o->infinite_gold));
+    JS_SetPropertyStr(ctx, opts, "infiniteTroops", JS_NewBool(ctx, o->infinite_troops));
+    call_void("start", 1, &opts);
+    JSValue ok = call("ready", 0, NULL);
+    bool ready = JS_ToBool(ctx, ok);
+    JS_FreeValue(ctx, ok);
+    if (ready) {
+        attach_game();
+        refresh_relations();
+        refresh_snapshot(0);
+        running = true;
     } else {
-        r.player = (int)get_num(p, "id");
-        get_str(p, "name", r.player_name, sizeof r.player_name);
-        r.player_troops = get_num(p, "troops");
-        r.ally = get_bool(p, "ally");
-        r.can_ally = get_bool(p, "canAlly");
-        r.can_break = get_bool(p, "canBreak");
-        r.can_target = get_bool(p, "canTarget");
-        r.can_embargo = get_bool(p, "canEmbargo");
-        r.can_donate = get_bool(p, "canDonate");
+        JSValue err = call("error", 0, NULL);
+        char msg[256];
+        to_buf(err, msg, sizeof msg);
+        JS_FreeValue(ctx, err);
+        SDL_LockMutex(snap_lock);
+        snap.status = GAME_FAILED;
+        snprintf(snap.error, sizeof snap.error, "%s", msg);
+        SDL_UnlockMutex(snap_lock);
+        running = false;
     }
+}
+
+static void do_stop(void) {
+    running = false;
     SDL_LockMutex(snap_lock);
-    menu = r;
+    snap.status = GAME_IDLE;
+    snap.terrain = NULL;
+    snap.state = NULL;
+    snap.colors = NULL;
     SDL_UnlockMutex(snap_lock);
+    release_game();
 }
 
-static JSValue int2(int a, int b, JSValue *argv) {
-    argv[0] = JS_NewInt32(ctx, a);
-    argv[1] = JS_NewInt32(ctx, b);
-    return JS_UNDEFINED;
-}
-
-static void handle(const Cmd *c) {
-    JSValue argv[3];
-    switch (c->type) {
-        case CMD_START: {
-            JSValue o = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, o, "map", JS_NewInt32(ctx, c->start.map));
-            JS_SetPropertyStr(ctx, o, "difficulty", JS_NewInt32(ctx, c->start.difficulty));
-            JS_SetPropertyStr(ctx, o, "bots", JS_NewInt32(ctx, c->start.bots));
-            JS_SetPropertyStr(ctx, o, "nations", JS_NewInt32(ctx, c->start.nations));
-            JS_SetPropertyStr(ctx, o, "name", JS_NewString(ctx, c->start.name));
-            SDL_LockMutex(snap_lock);
-            snap.status = GAME_LOADING;
-            snap.error[0] = 0;
-            snap.terrain = NULL;
-            snap.state = NULL;
-            snap.colors = NULL;
-            snap.nlabels = snap.nunits = 0;
-            snap.winner[0] = 0;
-            msg_count = 0;
-            menu.kind = MENU_NONE;
-            SDL_UnlockMutex(snap_lock);
-            // Only now that the render thread can no longer see them.
-            release_game();
-            argv[0] = o;
-            call_void("start", 1, argv);
-            JSValue ok = call("ready", 0, NULL);
-            bool ready = JS_ToBool(ctx, ok);
-            JS_FreeValue(ctx, ok);
-            if (ready) {
-                attach_game();
-                refresh_snapshot(0);
-                running = true;
-            } else {
-                JSValue err = call("error", 0, NULL);
-                SDL_LockMutex(snap_lock);
-                snap.status = GAME_FAILED;
-                to_str(err, snap.error, sizeof snap.error);
-                SDL_UnlockMutex(snap_lock);
-                JS_FreeValue(ctx, err);
-                running = false;
-            }
-            break;
-        }
-        case CMD_STOP:
-            running = false;
-            SDL_LockMutex(snap_lock);
-            snap.status = GAME_IDLE;
-            snap.terrain = NULL;
-            snap.state = NULL;
-            snap.colors = NULL;
-            SDL_UnlockMutex(snap_lock);
-            release_game();
-            break;
-        default:
-            if (!running) break;
-            switch (c->type) {
-                case CMD_PRIMARY:
-                    int2(c->a, c->b, argv);
-                    call_void("primary", 2, argv);
-                    break;
-                case CMD_BOAT:
-                    int2(c->a, c->b, argv);
-                    call_void("boat", 2, argv);
-                    break;
-                case CMD_BUILD:
-                    argv[0] = JS_NewInt32(ctx, c->a);
-                    int2(c->b, c->c, argv + 1);
-                    call_void("build", 3, argv);
-                    break;
-                case CMD_BUILD_MENU: {
-                    int2(c->a, c->b, argv);
-                    JSValue r = call("buildMenu", 2, argv);
-                    if (!JS_IsException(r)) menu_from_build(r, c->c, c->a, c->b);
-                    JS_FreeValue(ctx, r);
-                    break;
-                }
-                case CMD_PLAYER_MENU: {
-                    int2(c->a, c->b, argv);
-                    JSValue r = call("playerMenu", 2, argv);
-                    menu_from_player(r, c->c, c->a, c->b);
-                    JS_FreeValue(ctx, r);
-                    break;
-                }
-                case CMD_PLAYER_ACTION:
-                    int2(c->a, c->b, argv);
-                    call_void("playerAction", 2, argv);
-                    break;
-                case CMD_ALLIANCES:
-                    argv[0] = JS_NewBool(ctx, c->a != 0);
-                    call_void("answerAlliances", 1, argv);
-                    break;
-                case CMD_RATIO:
-                    argv[0] = JS_NewFloat64(ctx, c->f);
-                    call_void("setAttackRatio", 1, argv);
-                    break;
-                case CMD_CANCEL_ATTACK:
-                    call_void("cancelLastAttack", 0, NULL);
-                    break;
-                default:
-                    break;
-            }
-    }
+static void store_result(int id, char *json) {
+    SDL_LockMutex(snap_lock);
+    Result *slot = &results[id % MAX_RESULTS];
+    free(slot->json);
+    slot->id = id;
+    slot->json = json;
+    SDL_UnlockMutex(snap_lock);
 }
 
 static bool load_engine(void) {
@@ -593,11 +544,11 @@ static bool load_engine(void) {
     maps.map_folders = calloc((size_t)maps.nmaps + 1, NAME_LEN);
     for (int i = 0; i < maps.nmaps; i++) {
         JSValue v = JS_GetPropertyUint32(ctx, list, (uint32_t)i);
-        to_str(v, maps.map_names[i], NAME_LEN);
+        to_buf(v, maps.map_names[i], NAME_LEN);
         JS_FreeValue(ctx, v);
         JSValue idx = JS_NewInt32(ctx, i);
         JSValue f = call("mapFolder", 1, &idx);
-        to_str(f, maps.map_folders[i], NAME_LEN);
+        to_buf(f, maps.map_folders[i], NAME_LEN);
         JS_FreeValue(ctx, f);
     }
     JS_FreeValue(ctx, list);
@@ -605,9 +556,8 @@ static bool load_engine(void) {
     for (nstrings = 0; string_keys && string_keys[nstrings] && nstrings < MAX_STRINGS; nstrings++) {
         JSValue k = JS_NewString(ctx, string_keys[nstrings]);
         JSValue v = call("t", 1, &k);
-        char tmp[256];
-        to_str(v, tmp, sizeof tmp);
-        string_values[nstrings] = strdup(tmp);
+        char *s = to_cstr(v);
+        string_values[nstrings] = s ? s : strdup(string_keys[nstrings]);
         JS_FreeValue(ctx, v);
     }
     return true;
@@ -620,24 +570,37 @@ static int engine_main(void *unused) {
     if (!init_ok) return 1;
 
     double next_tick = now_ms();
-    Cmd local[MAX_CMDS];
+    Call local[MAX_CALLS];
     for (;;) {
         SDL_LockMutex(cmd_lock);
-        int n = ncmds;
-        memcpy(local, cmds, sizeof(Cmd) * (size_t)n);
-        ncmds = 0;
+        int n = ncalls;
+        memcpy(local, calls, sizeof(Call) * (size_t)n);
+        ncalls = 0;
         bool q = quit, p = paused;
+        bool do_s = start_requested, do_x = stop_requested;
+        StartOptions opts = start_opts;
+        start_requested = stop_requested = false;
         double interval = 100.0 / speed;
         SDL_UnlockMutex(cmd_lock);
         if (q) break;
 
-        for (int i = 0; i < n; i++) handle(&local[i]);
+        if (do_x) do_stop();
+        if (do_s) do_start(&opts);
+        for (int i = 0; i < n; i++) {
+            if (running) {
+                char *json = rpc(local[i].method, local[i].args);
+                if (local[i].id) store_result(local[i].id, json);
+                else free(json);
+            } else if (local[i].id) {
+                store_result(local[i].id, strdup("null"));
+            }
+            free(local[i].args);
+        }
 
         double now = now_ms();
         if (running && !p && now >= next_tick) {
             double t0 = now_ms();
-            JSValue r = call("tick", 0, NULL);
-            JS_FreeValue(ctx, r);
+            JS_FreeValue(ctx, call("tick", 0, NULL));
             double dt = now_ms() - t0;
             refresh_snapshot(dt);
             next_tick += interval;
@@ -645,10 +608,12 @@ static int engine_main(void *unused) {
             if (next_tick < now_ms()) next_tick = now_ms();
             continue;
         }
+        // Paused: still show what the calls changed (ratio, ghost...).
+        if (running && p && n > 0) refresh_snapshot(snap.tick_ms);
         if (!running || p) next_tick = now;
 
         SDL_LockMutex(cmd_lock);
-        if (ncmds == 0 && !quit) {
+        if (ncalls == 0 && !quit && !start_requested && !stop_requested) {
             double wait = running && !p ? next_tick - now_ms() : 50;
             if (wait > 0) SDL_CondWaitTimeout(cmd_cond, cmd_lock, (Uint32)wait + 1);
         }
@@ -690,9 +655,20 @@ void engine_shutdown(void) {
     thread = NULL;
 }
 
-void engine_send(const Cmd *cmd) {
+void engine_start(const StartOptions *opts) {
+    SDL_LockMutex(snap_lock);
+    snap.status = GAME_LOADING;
+    SDL_UnlockMutex(snap_lock);
     SDL_LockMutex(cmd_lock);
-    if (ncmds < MAX_CMDS) cmds[ncmds++] = *cmd;
+    start_opts = *opts;
+    start_requested = true;
+    SDL_CondSignal(cmd_cond);
+    SDL_UnlockMutex(cmd_lock);
+}
+
+void engine_stop(void) {
+    SDL_LockMutex(cmd_lock);
+    stop_requested = true;
     SDL_CondSignal(cmd_cond);
     SDL_UnlockMutex(cmd_lock);
 }
@@ -711,6 +687,38 @@ void engine_set_paused(bool p) {
     SDL_UnlockMutex(cmd_lock);
 }
 
+int engine_call(const char *method, const char *args_json, bool want_result) {
+    SDL_LockMutex(cmd_lock);
+    int id = 0;
+    if (ncalls < MAX_CALLS) {
+        Call *c = &calls[ncalls++];
+        if (want_result) {
+            if (++next_call_id > 1000000000) next_call_id = 1;
+            id = next_call_id;
+        }
+        c->id = id;
+        snprintf(c->method, sizeof c->method, "%s", method);
+        c->args = strdup(args_json ? args_json : "{}");
+    }
+    SDL_CondSignal(cmd_cond);
+    SDL_UnlockMutex(cmd_lock);
+    return id;
+}
+
+char *engine_result(int id) {
+    if (id <= 0) return NULL;
+    SDL_LockMutex(snap_lock);
+    Result *slot = &results[id % MAX_RESULTS];
+    char *out = NULL;
+    if (slot->id == id && slot->json) {
+        out = slot->json;
+        slot->json = NULL;
+        slot->id = 0;
+    }
+    SDL_UnlockMutex(snap_lock);
+    return out;
+}
+
 const Snapshot *engine_lock(void) {
     SDL_LockMutex(snap_lock);
     return &snap;
@@ -718,9 +726,10 @@ const Snapshot *engine_lock(void) {
 
 void engine_unlock(void) { SDL_UnlockMutex(snap_lock); }
 
-const char *engine_player_name(int id) {
-    if (id < 0 || id >= MAX_PLAYERS) return "";
-    return names[id];
+const PlayerInfo *engine_player(int id) {
+    static const PlayerInfo none = {{0}, {0}, 0, false};
+    if (id < 0 || id >= MAX_PLAYERS) return &none;
+    return &players[id];
 }
 
 int engine_take_dirty(uint32_t **out, int *full) {
@@ -737,27 +746,6 @@ int engine_take_dirty(uint32_t **out, int *full) {
     SDL_UnlockMutex(snap_lock);
     return n;
 }
-
-bool engine_pop_message(Msg *out) {
-    SDL_LockMutex(snap_lock);
-    bool ok = msg_count > 0;
-    if (ok) {
-        *out = msgs[msg_head];
-        msg_head = (msg_head + 1) % MAX_MSGS;
-        msg_count--;
-    }
-    SDL_UnlockMutex(snap_lock);
-    return ok;
-}
-
-int engine_menu(MenuResult *out) {
-    SDL_LockMutex(snap_lock);
-    *out = menu;
-    SDL_UnlockMutex(snap_lock);
-    return out->seq;
-}
-
-int engine_next_seq(void) { return ++seq_counter; }
 
 const MapList *engine_maps(void) { return &maps; }
 

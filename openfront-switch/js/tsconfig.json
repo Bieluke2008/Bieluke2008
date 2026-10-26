@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2022", "DOM"],
+    "types": []
+  },
+  "files": ["adapter.ts", "../packages/engine-api/globals.d.ts", "../src/client/vite-env.d.ts"]
+}

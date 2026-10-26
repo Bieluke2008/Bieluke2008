@@ -4,3 +4,4 @@ romfs/
 *.nro
 *.nacp
 *.elf
+tools/node_modules/

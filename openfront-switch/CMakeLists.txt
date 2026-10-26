@@ -19,10 +19,12 @@ target_compile_definitions(quickjs PRIVATE _GNU_SOURCE)
 target_compile_options(quickjs PRIVATE -w)
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2 SDL2_ttf)
+pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2 SDL2_ttf SDL2_image)
 find_package(ZLIB REQUIRED)
 
 add_executable(openfront
-  src/main.c src/engine.c src/render.c src/text.c src/input.c)
+  src/main.c src/engine.c src/input.c src/gfx.c src/ui.c src/hud.c src/map.c
+  src/radial.c src/menus.c src/solo.c deps/cjson/cJSON.c)
+target_include_directories(openfront PRIVATE src deps/cjson)
 target_compile_options(openfront PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 target_link_libraries(openfront PRIVATE quickjs PkgConfig::SDL2 ZLIB::ZLIB m pthread)
