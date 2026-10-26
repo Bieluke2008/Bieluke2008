@@ -176,7 +176,47 @@ static void run_jobs(void) {
 }
 
 /** Calls OF[name](...args) (args are freed); the caller frees the result. */
+// OPENFRONT_PROFILE=1: time spent per adapter function, printed every 100 ticks.
+#define PROF_MAX 48
+static struct {
+    const char *name;
+    double ms;
+    int n;
+} prof[PROF_MAX];
+static int nprof;
+static bool profiling;
+
+static void prof_add(const char *name, double ms) {
+    for (int i = 0; i < nprof; i++) {
+        if (!strcmp(prof[i].name, name)) {
+            prof[i].ms += ms;
+            prof[i].n++;
+            return;
+        }
+    }
+    if (nprof < PROF_MAX) prof[nprof++] = (typeof(prof[0])){strdup(name), ms, 1};
+}
+
+static void prof_dump(int ticks) {
+    fprintf(stderr, "--- profile over %d ticks (ms per tick) ---\n", ticks);
+    for (int i = 0; i < nprof; i++) {
+        fprintf(stderr, "  %-14s %8.2f  (%d calls)\n", prof[i].name, prof[i].ms / ticks, prof[i].n);
+        prof[i].ms = 0;
+        prof[i].n = 0;
+    }
+}
+
+static JSValue call_raw(const char *name, int argc, JSValue *argv);
+
 static JSValue call(const char *name, int argc, JSValue *argv) {
+    if (!profiling) return call_raw(name, argc, argv);
+    double t0 = now_ms();
+    JSValue v = call_raw(name, argc, argv);
+    prof_add(name, now_ms() - t0);
+    return v;
+}
+
+static JSValue call_raw(const char *name, int argc, JSValue *argv) {
     JSValue fn = JS_GetPropertyStr(ctx, of_obj, name);
     JSValue r = JS_Call(ctx, fn, of_obj, argc, argv);
     JS_FreeValue(ctx, fn);
@@ -230,9 +270,15 @@ static int64_t array_len(JSValueConst arr) {
 /** OF.call(method, args) -> JSON string (malloc'd). */
 static char *rpc(const char *method, const char *args) {
     JSValue argv[2] = {JS_NewString(ctx, method), JS_NewString(ctx, args ? args : "")};
-    JSValue r = call("call", 2, argv);
+    double t0 = now_ms();
+    JSValue r = call_raw("call", 2, argv);
     char *s = to_cstr(r);
     JS_FreeValue(ctx, r);
+    if (profiling) {
+        char name[64];
+        snprintf(name, sizeof name, "rpc:%s", method);
+        prof_add(name, now_ms() - t0);
+    }
     return s ? s : strdup("null");
 }
 
@@ -500,6 +546,7 @@ static void store_result(int id, char *json) {
 
 static bool load_engine(void) {
     rt = JS_NewRuntime();
+    profiling = getenv("OPENFRONT_PROFILE") != NULL;
     JS_SetMaxStackSize(rt, 3 * 1024 * 1024);
     ctx = JS_NewContext(rt);
     JSValue global = JS_GetGlobalObject(ctx);
@@ -603,6 +650,14 @@ static int engine_main(void *unused) {
             JS_FreeValue(ctx, call("tick", 0, NULL));
             double dt = now_ms() - t0;
             refresh_snapshot(dt);
+            static int prof_ticks;
+            if (profiling && ++prof_ticks == 100) {
+                JSMemoryUsage mu;
+                JS_ComputeMemoryUsage(rt, &mu);
+                prof_dump(prof_ticks);
+                fprintf(stderr, "  heap %.1f MB, %lld objects\n", mu.malloc_size / 1048576.0, (long long)mu.obj_count);
+                prof_ticks = 0;
+            }
             next_tick += interval;
             // Running behind (slow CPU): don't try to catch up in a burst.
             if (next_tick < now_ms()) next_tick = now_ms();
