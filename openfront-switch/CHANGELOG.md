@@ -5,7 +5,26 @@ Cada versión es una etiqueta de git (`vX.Y.Z`) y, a partir de la 0.2.0, una
 workflow **OpenFront Switch release** al subir la etiqueta). El número de
 versión está en `VERSION` y se ve en la pantalla de inicio de la app.
 
-## 0.4.0
+## 0.5.0
+
+Menos bajones al atacar. Medido en PC en una partida en Europa con el
+jugador atacando (en la Switch los tiempos son unas 3-4 veces mayores):
+
+- Clic de ataque: hasta 145 ms → 7 ms. Comprobar si puedes atacar tierra de
+  nadie recorría en JS toda la tierra libre en 200 casillas; ahora es C.
+  También acelera el menú radial y a los bots.
+- Ticks lentos: de 83 por encima de 60 ms (20 por encima de 100 ms) a unos
+  4-9 (0-1); tick medio ~28 → ~22 ms. Pasan a C las rutas de barcos por
+  agua, la búsqueda de costas, los vecinos de cada jugador, la elección de
+  ataque de las naciones y los logaritmos/exponenciales deterministas del
+  cálculo de cada casilla conquistada. La partida sigue siendo idéntica a la
+  del motor original (comprobado con sumas de control; las matemáticas, bit a
+  bit también en ARM).
+- Mapa: cada alianza o embargo entre dos jugadores cualesquiera repintaba el
+  mapa entero y lo subía a la GPU (19 MB en Europa, cada ~2 s); ahora solo
+  se repintan esos dos jugadores. Los cambios se suben en bloques de 64×64
+  en vez de un rectángulo que acababa cubriendo casi todo el mapa.
+
 
 - Barra de progreso bajo cada edificio, como en PC (14×3 casillas, de rojo a
   verde): construcción, cuenta atrás al borrarlo y recarga de silos y SAM.
