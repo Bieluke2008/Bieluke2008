@@ -21,6 +21,7 @@ import { flattenedEmojiTable, GameStartInfo, StampedIntent } from "@openfront/en
 import { renderTroops } from "@openfront/engine-lib/Format";
 import { createGameRunner } from "@openfront/engine/GameRunner";
 import { ghost, placeGhost } from "./build";
+import { bindNativeMaps } from "./native/maps";
 import { colorNewPlayers, colorTable, resetColors } from "./colors";
 import { actionableClick, processUpdates, resetEvents } from "./events";
 import { attackAction, frameModel, hudUpdates, LB, resetHud } from "./hud";
@@ -73,6 +74,7 @@ interface StartOptions {
   instantBuild?: boolean;
   infiniteGold?: boolean;
   infiniteTroops?: boolean;
+  seed?: string;
 }
 
 let error: string | null = null;
@@ -107,7 +109,8 @@ async function start(opts: StartOptions): Promise<void> {
   };
   const difficulty = [Difficulty.Easy, Difficulty.Medium, Difficulty.Hard, Difficulty.Impossible][opts.difficulty];
   const gameStart = {
-    gameID: "SWITCH" + Math.floor(host.now()).toString(36).toUpperCase(),
+    // A fixed seed (benchmarks) makes the game, bots and nations repeat.
+    gameID: opts.seed ? "SWITCH" + opts.seed : "SWITCH" + Math.floor(host.now()).toString(36).toUpperCase(),
     lobbyCreatedAt: 0,
     players: [{ clientID: CLIENT_ID, username: opts.name, clanTag: null }],
     config: {
@@ -139,6 +142,7 @@ async function start(opts: StartOptions): Promise<void> {
     },
     onUpdate,
   );
+  bindNativeMaps(S.runner.game);
   colorNewPlayers();
   playersVersion++;
 }
@@ -391,6 +395,19 @@ const OF = {
 
   tick(): boolean {
     if (S.runner === null) return false;
+    // Seeded benchmarks: the human spawns at a fixed turn on the land tile
+    // nearest the map centre, so the whole game repeats exactly.
+    if (startOptions?.seed && turnNumber === 5) {
+      const g = game();
+      const cx = g.width() >> 1, cy = g.height() >> 1;
+      for (let r = 0; r < g.width(); r++) {
+        const x = cx + r;
+        if (x < g.width() && g.isLand(g.ref(x, cy)) && !g.hasOwner(g.ref(x, cy))) {
+          S.pendingIntents.push({ type: "spawn", tile: g.ref(x, cy) });
+          break;
+        }
+      }
+    }
     const intents: StampedIntent[] = S.pendingIntents.map((i) => ({ ...i, clientID: CLIENT_ID }) as StampedIntent);
     S.pendingIntents = [];
     S.runner.addTurn({ turnNumber: turnNumber++, intents });
@@ -480,6 +497,19 @@ const OF = {
     return JSON.stringify(result === undefined ? null : result, (_k, v) =>
       typeof v === "bigint" ? Number(v) : v,
     );
+  },
+
+  /** Determinism check: a hash of every tile's state and each player's troops and gold. */
+  checksum(): string {
+    const g = game();
+    const st = (g.map() as any).state as Uint16Array;
+    let h = 2166136261;
+    for (let i = 0; i < st.length; i++) h = Math.imul(h ^ st[i], 16777619);
+    for (const p of g.allPlayers()) {
+      h = Math.imul(h ^ Math.floor(p.troops()), 16777619);
+      h = Math.imul(h ^ Number(p.gold() % 1000003n), 16777619);
+    }
+    return g.ticks() + ":" + (h >>> 0).toString(16);
   },
 
   troops(n: number): string {

@@ -653,11 +653,16 @@ static void autoplay(int frame) {
             if (strcmp(ml->map_folders[i], test.map) == 0) G.opts.map = i;
         }
         G.opts.instant_build = G.opts.infinite_gold = test.scene && (!strcmp(test.scene, "build") || !strcmp(test.scene, "ghost"));
+        if (getenv("OPENFRONT_BOTS")) G.opts.bots = atoi(getenv("OPENFRONT_BOTS"));
+        if (getenv("OPENFRONT_NATIONS")) G.opts.nations = atoi(getenv("OPENFRONT_NATIONS"));
         start_game();
+        // Benchmarks: run ticks back to back instead of 10 per second.
+        if (getenv("OPENFRONT_TEST_SPEED")) engine_set_speed(atof(getenv("OPENFRONT_TEST_SPEED")));
     }
     if (G.snap.status != GAME_RUNNING || !app.frame) return;
     const cJSON *me = jget(app.frame, "me");
-    if (app.spawn_phase && !jbool(me, "spawned") && G.snap.tick > 2 && G.snap.tick != test.last_tick) {
+    // Benchmarks leave the human out, so the seeded game is fully repeatable.
+    if (app.spawn_phase && !getenv("OPENFRONT_BENCH") && !jbool(me, "spawned") && G.snap.tick > 2 && G.snap.tick != test.last_tick) {
         test.last_tick = G.snap.tick;
         // Spawn on land near the map centre.
         for (int r = 0; r < G.snap.width; r += 2) {
@@ -709,6 +714,7 @@ static void autoplay(int frame) {
         }
         return;
     }
+    if (getenv("OPENFRONT_BENCH")) return;  // benchmarks: spawn only, the AI plays
     if (!app.spawn_phase && G.snap.tick % 15 == 0 && G.snap.tick != test.last_tick) {
         test.last_tick = G.snap.tick;
         float mx, my;

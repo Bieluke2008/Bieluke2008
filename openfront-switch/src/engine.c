@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "native.h"
 
 #include <SDL.h>
 #include <stdio.h>
@@ -205,6 +206,78 @@ static void prof_dump(int ticks) {
         prof[i].n = 0;
     }
 }
+
+
+#ifdef OPENFRONT_JS_SAMPLER
+// Dev-only JS sampler: needs the JS_PortWalkStack hook patched into a local
+// quickjs.c. Each interrupt poll (every ~10k bytecode branches) is a sample.
+void JS_PortWalkStack(JSRuntime *rt, void (*cb)(void *, const char *, int, int), void *opaque);
+#define SAMPLE_SLOTS 4096
+static struct {
+    char key[80];
+    int self, incl, stamp;
+} samples[SAMPLE_SLOTS];
+static int sample_stamp, sample_total;
+static bool sample_self_done;
+
+static int sample_slot(const char *key) {
+    unsigned h = 2166136261u;
+    for (const char *c = key; *c; c++) h = (h ^ (unsigned char)*c) * 16777619u;
+    for (int i = 0; i < SAMPLE_SLOTS; i++) {
+        int k = (int)((h + (unsigned)i) % SAMPLE_SLOTS);
+        if (!samples[k].key[0]) {
+            snprintf(samples[k].key, sizeof samples[k].key, "%s", key);
+            return k;
+        }
+        if (!strcmp(samples[k].key, key)) return k;
+    }
+    return 0;
+}
+
+static void sample_frame(void *opaque, const char *name, int line, int depth) {
+    (void)opaque, (void)depth;
+    char key[80];
+    snprintf(key, sizeof key, "%s:%d", name && *name ? name : "<anon>", line);
+    int k = sample_slot(key);
+    if (!sample_self_done) {
+        samples[k].self++;
+        if (strcmp(name ? name : "", "[native]") != 0) sample_self_done = true;
+    }
+    if (samples[k].stamp != sample_stamp) {
+        samples[k].stamp = sample_stamp;
+        samples[k].incl++;
+    }
+}
+
+static int sample_handler(JSRuntime *r, void *opaque) {
+    (void)opaque;
+    sample_stamp++;
+    sample_total++;
+    sample_self_done = false;
+    JS_PortWalkStack(r, sample_frame, NULL);
+    return 0;
+}
+
+static int cmp_self(const void *a, const void *b) {
+    return ((const typeof(samples[0]) *)b)->self - ((const typeof(samples[0]) *)a)->self;
+}
+static int cmp_incl(const void *a, const void *b) {
+    return ((const typeof(samples[0]) *)b)->incl - ((const typeof(samples[0]) *)a)->incl;
+}
+
+static void sample_dump(void) {
+    static typeof(samples[0]) sorted[SAMPLE_SLOTS];
+    memcpy(sorted, samples, sizeof samples);
+    qsort(sorted, SAMPLE_SLOTS, sizeof sorted[0], cmp_self);
+    fprintf(stderr, "=== JS self time (%d samples) ===\n", sample_total);
+    for (int i = 0; i < 40 && sorted[i].self; i++)
+        fprintf(stderr, "  %5.1f%%  %s\n", 100.0 * sorted[i].self / sample_total, sorted[i].key);
+    qsort(sorted, SAMPLE_SLOTS, sizeof sorted[0], cmp_incl);
+    fprintf(stderr, "=== JS inclusive time ===\n");
+    for (int i = 0; i < 60 && sorted[i].incl; i++)
+        fprintf(stderr, "  %5.1f%%  %s\n", 100.0 * sorted[i].incl / sample_total, sorted[i].key);
+}
+#endif
 
 static JSValue call_raw(const char *name, int argc, JSValue *argv);
 
@@ -502,6 +575,7 @@ static void do_start(const StartOptions *o) {
     JS_SetPropertyStr(ctx, opts, "instantBuild", JS_NewBool(ctx, o->instant_build));
     JS_SetPropertyStr(ctx, opts, "infiniteGold", JS_NewBool(ctx, o->infinite_gold));
     JS_SetPropertyStr(ctx, opts, "infiniteTroops", JS_NewBool(ctx, o->infinite_troops));
+    if (getenv("OPENFRONT_SEED")) JS_SetPropertyStr(ctx, opts, "seed", JS_NewString(ctx, getenv("OPENFRONT_SEED")));
     call_void("start", 1, &opts);
     JSValue ok = call("ready", 0, NULL);
     bool ready = JS_ToBool(ctx, ok);
@@ -547,8 +621,13 @@ static void store_result(int id, char *json) {
 static bool load_engine(void) {
     rt = JS_NewRuntime();
     profiling = getenv("OPENFRONT_PROFILE") != NULL;
+    if (getenv("OPENFRONT_GC_MB")) JS_SetGCThreshold(rt, (size_t)atoi(getenv("OPENFRONT_GC_MB")) << 20);
+#ifdef OPENFRONT_JS_SAMPLER
+    if (profiling) JS_SetInterruptHandler(rt, sample_handler, NULL);
+#endif
     JS_SetMaxStackSize(rt, 3 * 1024 * 1024);
     ctx = JS_NewContext(rt);
+    if (!getenv("OPENFRONT_NO_NATIVE")) native_install(ctx);
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue host = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, host, "log", JS_NewCFunction(ctx, js_log, "log", 1));
@@ -655,6 +734,15 @@ static int engine_main(void *unused) {
                 JSMemoryUsage mu;
                 JS_ComputeMemoryUsage(rt, &mu);
                 prof_dump(prof_ticks);
+                JSValue cs = call_raw("checksum", 0, NULL);
+                char *css = to_cstr(cs);
+                fprintf(stderr, "  checksum %s\n", css ? css : "?");
+                free(css);
+                JS_FreeValue(ctx, cs);
+#ifdef OPENFRONT_JS_SAMPLER
+                static int dumps;
+                if (++dumps % 5 == 0) sample_dump();
+#endif
                 fprintf(stderr, "  heap %.1f MB, %lld objects\n", mu.malloc_size / 1048576.0, (long long)mu.obj_count);
                 prof_ticks = 0;
             }
