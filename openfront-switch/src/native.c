@@ -105,7 +105,9 @@ static JSValue call_cb(JSContext *ctx, JSValueConst cb, int64_t v) {
 static JSValue map_method(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic,
                           JSValueConst *data) {
     (void)this_val;
-    const NMap *m = &maps[JS_VALUE_GET_INT(data[0])];
+    int idx = JS_VALUE_GET_INT(data[0]);
+    if (idx >= nmaps) return JS_ThrowTypeError(ctx, "map no longer bound");
+    const NMap *m = &maps[idx];
     int64_t r = argc > 0 ? iarg(ctx, argv[0]) : -1;
     if (argc < MAP_METHODS[magic].argc) return JS_ThrowTypeError(ctx, "%s: missing arguments", MAP_METHODS[magic].name);
     switch (magic) {
@@ -309,9 +311,13 @@ static JSValue js_bind_map(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 /** Forgets bound maps (a new game). The functions stay valid while referenced. */
 static JSValue js_unbind_maps(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val, (void)argc, (void)argv;
-    // Keep the arrays alive: old closures may still be reachable until GC.
-    // Their slots are only reused by a new bind of different arrays.
-    (void)ctx;
+    // A new game: its main map becomes slot 0 again. Closures bound to the
+    // old game's objects die with them.
+    for (int i = 0; i < nmaps; i++) {
+        JS_FreeValue(ctx, maps[i].terrain_obj);
+        JS_FreeValue(ctx, maps[i].state_obj);
+    }
+    nmaps = 0;
     return JS_UNDEFINED;
 }
 
@@ -801,6 +807,302 @@ static const JSCFunctionListEntry iter_proto[] = {
     JS_CFUNC_DEF("[Symbol.iterator]", 0, iter_self),
 };
 
+
+// --- Kernels: whole engine methods whose loops run per tile ------------------------------
+
+static JSAtom atom_s[4], atom_add_border;
+
+/** PseudoRandom.next() on the object's sfc32 state words s0..s3. */
+typedef struct {
+    int32_t s0, s1, s2, s3;
+} Sfc32;
+
+static void sfc_load(JSContext *ctx, JSValueConst obj, Sfc32 *r) {
+    int32_t *w[4] = {&r->s0, &r->s1, &r->s2, &r->s3};
+    for (int i = 0; i < 4; i++) {
+        JSValue v = JS_GetProperty(ctx, obj, atom_s[i]);
+        JS_ToInt32(ctx, w[i], v);
+        JS_FreeValue(ctx, v);
+    }
+}
+
+static void sfc_store(JSContext *ctx, JSValueConst obj, const Sfc32 *r) {
+    int32_t w[4] = {r->s0, r->s1, r->s2, r->s3};
+    for (int i = 0; i < 4; i++) JS_SetProperty(ctx, obj, atom_s[i], JS_NewInt32(ctx, w[i]));
+}
+
+static double sfc_next(Sfc32 *r) {
+    uint32_t s0 = (uint32_t)r->s0, s1 = (uint32_t)r->s1, s2 = (uint32_t)r->s2, s3 = (uint32_t)r->s3;
+    uint32_t t = s0 + s1 + s3;
+    s3 = s3 + 1;
+    s0 = s1 ^ (s1 >> 9);
+    s1 = s2 + (s2 << 3);
+    s2 = (s2 << 21) | (s2 >> 11);
+    s2 = s2 + t;
+    r->s0 = (int32_t)s0, r->s1 = (int32_t)s1, r->s2 = (int32_t)s2, r->s3 = (int32_t)s3;
+    return (double)t / 4294967296.0;
+}
+
+/**
+ * AttackExecution.addNeighbors(tile) (packages/engine/src/execution/
+ * AttackExecution.ts), with mg.ticks(), the small ids, the PseudoRandom, the
+ * native heap and the attack passed in:
+ * addNeighbors(tile, tickNow, targetSmallID, ownerSmallID, random, heap, attack)
+ */
+static JSValue js_add_neighbors(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 7 || nmaps == 0) return JS_ThrowTypeError(ctx, "addNeighbors: bad arguments");
+    const NMap *m = &maps[0];
+    int64_t tile = iarg(ctx, argv[0]);
+    double tick_now = darg(ctx, argv[1]);
+    unsigned target = (unsigned)iarg(ctx, argv[2]), owner = (unsigned)iarg(ctx, argv[3]);
+    Heap *h = JS_GetOpaque2(ctx, argv[5], heap_class);
+    if (!h) return JS_EXCEPTION;
+    int64_t w = m->w, x = xof(m, tile), nb[4];
+    int n = 0;
+    if (tile >= w) nb[n++] = tile - w;
+    if (tile < (m->h - 1) * w) nb[n++] = tile + w;
+    if (x != 0) nb[n++] = tile - 1;
+    if (x != w - 1) nb[n++] = tile + 1;
+    Sfc32 rng;
+    bool rng_loaded = false;
+    JSValue add_border = JS_UNDEFINED;
+    JSValue ret = JS_UNDEFINED;
+    for (int i = 0; i < n; i++) {
+        int64_t nbr = nb[i];
+        if (!is_land(m, nbr) || is_impassable(m, nbr) || owner_id(m, nbr) != target) continue;
+        if (JS_IsUndefined(add_border)) add_border = JS_GetProperty(ctx, argv[6], atom_add_border);
+        JSValue a = num(nbr);
+        JSValue r = JS_Call(ctx, add_border, argv[6], 1, &a);
+        if (JS_IsException(r)) {
+            ret = r;
+            break;
+        }
+        JS_FreeValue(ctx, r);
+        int owned = 0;
+        int64_t nx = xof(m, nbr);
+        if (nbr >= w && owner_id(m, nbr - w) == owner) owned++;
+        if (nbr < (m->h - 1) * w && owner_id(m, nbr + w) == owner) owned++;
+        if (nx != 0 && owner_id(m, nbr - 1) == owner) owned++;
+        if (nx != w - 1 && owner_id(m, nbr + 1) == owner) owned++;
+        double mag;
+        unsigned t = T(m, nbr) & 0x1f;
+        // terrainType(): land here (water skipped), so Plains/Highland/Mountain/Impassable.
+        if (t >= 31) mag = 0;
+        else if (t < 10) mag = 1;
+        else if (t < 20) mag = 1.5;
+        else mag = 2;
+        if (!rng_loaded) {
+            sfc_load(ctx, argv[4], &rng);
+            rng_loaded = true;
+        }
+        double ri = floor(sfc_next(&rng) * 7);  // nextInt(0, 7)
+        double priority = (ri + 10) * (1 - owned * 0.5 + mag / 2) + tick_now;
+        // FlatBinaryHeap.enqueue
+        if (h->len == h->cap) {
+            int cap = h->cap << 1;
+            h->pri = realloc(h->pri, sizeof(float) * (size_t)cap);
+            h->tiles = realloc(h->tiles, sizeof(uint32_t) * (size_t)cap);
+            h->cap = cap;
+        }
+        int k = h->len++;
+        while (k > 0) {
+            int parent = (k - 1) >> 1;
+            if (priority >= (double)h->pri[parent]) break;
+            h->pri[k] = h->pri[parent];
+            h->tiles[k] = h->tiles[parent];
+            k = parent;
+        }
+        h->pri[k] = (float)priority;
+        h->tiles[k] = (uint32_t)nbr;
+    }
+    if (rng_loaded) sfc_store(ctx, argv[4], &rng);
+    JS_FreeValue(ctx, add_border);
+    return ret;
+}
+
+/** `visited[t]` with the typed array's out-of-range read (undefined, never equal to a gen). */
+static inline uint32_t vis_at(const uint32_t *visited, int64_t len, int64_t t) {
+    return t >= 0 && t < len ? visited[t] : 0;
+}
+
+/**
+ * PlayerExecution.calculateClusters() after its bookkeeping:
+ * clusters(borderTiles: TileSet, visited: Uint32Array, borderGen, currentGen)
+ * -> { clusters: TileRef[][], boxes: Int32Array } exactly as floodFillWithGen
+ * builds them (8-neighbour DFS, mark order, [minX, minY, maxX, maxY] boxes).
+ */
+static JSValue js_clusters(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 4 || nmaps == 0) return JS_ThrowTypeError(ctx, "clusters: bad arguments");
+    const NMap *m = &maps[0];
+    TSet *set = JS_GetOpaque2(ctx, argv[0], set_class);
+    if (!set) return JS_EXCEPTION;
+    size_t vbytes = 0;
+    uint32_t *visited = typed_ptr(ctx, argv[1], &vbytes);
+    if (!visited) return JS_ThrowTypeError(ctx, "clusters: Uint32Array expected");
+    int64_t vlen = (int64_t)(vbytes / 4);
+    uint32_t border_gen = (uint32_t)iarg(ctx, argv[2]), cur_gen = (uint32_t)iarg(ctx, argv[3]);
+#define VIS(t) vis_at(visited, vlen, (t))
+    for (int i = 0; i < set->dense_len; i++) {
+        uint32_t v = set->dense[i];
+        if (v != TOMBSTONE && v < vlen) visited[v] = border_gen;
+    }
+    int boxes_len = 64, nclusters = 0;
+    int32_t *boxes = malloc(sizeof(int32_t) * (size_t)boxes_len);
+    JSValue clusters = JS_NewArray(ctx);
+    int64_t *stack = NULL, scap = 0, sp = 0;
+    JSValue *vals = NULL;
+    int64_t vcap = 0;
+    int64_t w = m->w;
+    for (int i = 0; i < set->dense_len; i++) {
+        uint32_t start = set->dense[i];
+        if (start == TOMBSTONE) continue;
+        if (VIS((int64_t)start) == cur_gen) continue;
+        if (nclusters * 4 >= boxes_len) {
+            boxes_len *= 2;
+            boxes = realloc(boxes, sizeof(int32_t) * (size_t)boxes_len);
+        }
+        int64_t count = 0;
+        double minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+#define MARK(t)                                                                       \
+    do {                                                                              \
+        int64_t t_ = (t);                                                             \
+        if (t_ >= 0 && t_ < vlen) visited[t_] = cur_gen;                              \
+        if (count == vcap) {                                                          \
+            vcap = vcap ? vcap * 2 : 256;                                             \
+            vals = realloc(vals, sizeof(JSValue) * (size_t)vcap);                     \
+        }                                                                             \
+        vals[count++] = num(t_);                                                      \
+        if (sp == scap) {                                                             \
+            scap = scap ? scap * 2 : 256;                                             \
+            stack = realloc(stack, sizeof(int64_t) * (size_t)scap);                   \
+        }                                                                             \
+        stack[sp++] = t_;                                                             \
+        double x_ = (double)xof(m, t_), y_ = (double)yof(m, t_);                      \
+        if (x_ < minX) minX = x_;                                                     \
+        if (y_ < minY) minY = y_;                                                     \
+        if (x_ > maxX) maxX = x_;                                                     \
+        if (y_ > maxY) maxY = y_;                                                     \
+    } while (0)
+        // includeFn(start): visited[start] === borderGen
+        if (VIS((int64_t)start) == border_gen) MARK((int64_t)start);
+        while (sp > 0) {
+            int64_t tile = stack[--sp];
+            int64_t x = xof(m, tile), nb[8];
+            bool hasN = tile >= w, hasS = tile < (m->h - 1) * w;
+            int n = 0;
+            if (x != 0) {
+                if (hasN) nb[n++] = tile - 1 - w;
+                nb[n++] = tile - 1;
+                if (hasS) nb[n++] = tile - 1 + w;
+            }
+            if (hasN) nb[n++] = tile - w;
+            if (hasS) nb[n++] = tile + w;
+            if (x != w - 1) {
+                if (hasN) nb[n++] = tile + 1 - w;
+                nb[n++] = tile + 1;
+                if (hasS) nb[n++] = tile + 1 + w;
+            }
+            for (int k = 0; k < n; k++) {
+                int64_t nbr = nb[k];
+                if (VIS(nbr) == cur_gen) continue;
+                if (VIS(nbr) != border_gen) continue;
+                MARK(nbr);
+            }
+        }
+#undef MARK
+        // JS stores the doubles into an Int32Array (ToInt32).
+        double bx[4] = {minX, minY, maxX, maxY};
+        for (int k = 0; k < 4; k++) {
+            int32_t iv;
+            JSValue tmp = JS_NewFloat64(ctx, bx[k]);
+            JS_ToInt32(ctx, &iv, tmp);
+            boxes[nclusters * 4 + k] = iv;
+        }
+        JSValue arr = JS_NewArrayFrom(ctx, (int)count, vals);
+        JS_SetPropertyUint32(ctx, clusters, (uint32_t)nclusters, arr);
+        nclusters++;
+    }
+#undef VIS
+    free(stack);
+    free(vals);
+    JSValue len = JS_NewInt32(ctx, boxes_len);
+    JSValue boxes_arr = JS_NewTypedArray(ctx, 1, &len, JS_TYPED_ARRAY_INT32);
+    size_t bb = 0;
+    int32_t *bp = typed_ptr(ctx, boxes_arr, &bb);
+    if (bp) memcpy(bp, boxes, sizeof(int32_t) * (size_t)(nclusters * 4));
+    free(boxes);
+    JSValue out = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, out, "clusters", clusters);
+    JS_SetPropertyStr(ctx, out, "boxes", boxes_arr);
+    return out;
+}
+
+/**
+ * NameBoxCalculator's createGrid() + findLargestInscribedRectangle():
+ * nameRect(smallID, minX, minY, maxX, maxY, scalingFactor) -> [x, y, w, h]
+ * in scaled cells.
+ */
+static JSValue js_name_rect(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 6 || nmaps == 0) return JS_ThrowTypeError(ctx, "nameRect: bad arguments");
+    const NMap *m = &maps[0];
+    unsigned sid = (unsigned)iarg(ctx, argv[0]);
+    double sf = darg(ctx, argv[5]);
+    int64_t sminx = (int64_t)floor(darg(ctx, argv[1]) / sf), sminy = (int64_t)floor(darg(ctx, argv[2]) / sf);
+    int64_t smaxx = (int64_t)floor(darg(ctx, argv[3]) / sf), smaxy = (int64_t)floor(darg(ctx, argv[4]) / sf);
+    int64_t cols = smaxx - sminx + 1, rows = smaxy - sminy + 1;
+    if (cols <= 0 || rows <= 0) return JS_ThrowRangeError(ctx, "nameRect: empty box");
+    uint8_t *grid = calloc((size_t)(cols * rows), 1);  // grid[col * rows + row]
+    int64_t s = (int64_t)sf;
+    for (int64_t gx = sminx; gx <= smaxx; gx++) {
+        for (int64_t gy = sminy; gy <= smaxy; gy++) {
+            int64_t cx = gx * s, cy = gy * s;
+            if (cx < 0 || cx >= m->w || cy < 0 || cy >= m->h) continue;
+            int64_t t = cy * m->w + cx;
+            unsigned tb = T(m, t);
+            bool v = ((tb & 0x80) && (tb & 0x40)) || ((tb & 0x20) && (tb & 0x1f) < 10) ||
+                     (owner_id(m, t) == sid && sid != 0) || (S(m, t) & (1 << 13));
+            grid[(gx - sminx) * rows + (gy - sminy)] = v;
+        }
+    }
+    int64_t *heights = calloc((size_t)cols, sizeof(int64_t));
+    int64_t *stack = malloc(sizeof(int64_t) * (size_t)(cols + 1));
+    double bx = 0, by = 0, bw = 0, bh = 0;
+    for (int64_t row = 0; row < rows; row++) {
+        for (int64_t col = 0; col < cols; col++) heights[col] = grid[col * rows + row] ? heights[col] + 1 : 0;
+        // largestRectangleInHistogram(heights)
+        int64_t sp = 0;
+        double max_area = 0, rx = 0, rw = 0, rh = 0;
+        for (int64_t i = 0; i <= cols; i++) {
+            int64_t hh = i == cols ? 0 : heights[i];
+            while (sp > 0 && hh < heights[stack[sp - 1]]) {
+                int64_t height = heights[stack[--sp]];
+                int64_t width = sp == 0 ? i : i - stack[sp - 1] - 1;
+                if ((double)height * (double)width > max_area) {
+                    max_area = (double)height * (double)width;
+                    rx = sp == 0 ? 0 : (double)(stack[sp - 1] + 1);
+                    rw = (double)width;
+                    rh = (double)height;
+                }
+            }
+            stack[sp++] = i;
+        }
+        if (rw * rh > bw * bh) {
+            bx = rx;
+            by = (double)row - rh + 1;
+            bw = rw;
+            bh = rh;
+        }
+    }
+    free(grid);
+    free(heights);
+    free(stack);
+    JSValue vals[4] = {JS_NewFloat64(ctx, bx), JS_NewFloat64(ctx, by), JS_NewFloat64(ctx, bw), JS_NewFloat64(ctx, bh)};
+    return JS_NewArrayFrom(ctx, 4, vals);
+}
+
 // --- Install ----------------------------------------------------------------------------
 
 static JSValue make_class(JSContext *ctx, JSClassID *id, const char *name, JSClassFinalizer *fin, JSClassGCMark *mark,
@@ -827,6 +1129,12 @@ void native_install(JSContext *ctx) {
     JSValue n = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, n, "bindMap", JS_NewCFunction(ctx, js_bind_map, "bindMap", 6));
     JS_SetPropertyStr(ctx, n, "unbindMaps", JS_NewCFunction(ctx, js_unbind_maps, "unbindMaps", 0));
+    JS_SetPropertyStr(ctx, n, "addNeighbors", JS_NewCFunction(ctx, js_add_neighbors, "addNeighbors", 7));
+    JS_SetPropertyStr(ctx, n, "clusters", JS_NewCFunction(ctx, js_clusters, "clusters", 4));
+    JS_SetPropertyStr(ctx, n, "nameRect", JS_NewCFunction(ctx, js_name_rect, "nameRect", 6));
+    static const char *snames[4] = {"s0", "s1", "s2", "s3"};
+    for (int i = 0; i < 4; i++) atom_s[i] = JS_NewAtom(ctx, snames[i]);
+    atom_add_border = JS_NewAtom(ctx, "addBorderTile");
     JS_SetPropertyStr(ctx, n, "FlatBinaryHeap",
                       make_class(ctx, &heap_class, "FlatBinaryHeap", heap_finalizer, NULL, heap_proto,
                                  (int)(sizeof heap_proto / sizeof heap_proto[0]), (JSCFunction *)heap_ctor));
