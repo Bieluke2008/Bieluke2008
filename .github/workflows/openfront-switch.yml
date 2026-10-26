@@ -1,0 +1,43 @@
+name: OpenFront Switch
+
+on:
+  push:
+    paths:
+      - "openfront-switch/**"
+      - ".github/workflows/openfront-switch.yml"
+  pull_request:
+    paths:
+      - "openfront-switch/**"
+      - ".github/workflows/openfront-switch.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: openfront-switch
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Fetch OpenFront and QuickJS-ng
+        run: ./scripts/fetch-deps.sh
+
+      - name: Build romfs (engine bundle, maps, languages, fonts)
+        run: ./scripts/build-romfs.sh
+
+      - name: Smoke test the engine bundle
+        run: node scripts/node-host.mjs romfs/engine.js romfs britannia 300
+
+      - name: Build openfront.nro (devkitA64)
+        run: ./scripts/build-switch.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openfront-switch
+          path: openfront-switch/openfront.nro
+          if-no-files-found: error

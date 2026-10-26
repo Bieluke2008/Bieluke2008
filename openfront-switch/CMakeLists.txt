@@ -1,0 +1,28 @@
+# Desktop (Linux/macOS) build of the port, for development and testing.
+# The Switch build is the Makefile next to this file.
+cmake_minimum_required(VERSION 3.16)
+project(openfront_switch C)
+
+set(CMAKE_C_STANDARD 11)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+
+set(QJS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/deps/quickjs)
+add_library(quickjs STATIC
+  ${QJS_DIR}/dtoa.c
+  ${QJS_DIR}/libregexp.c
+  ${QJS_DIR}/libunicode.c
+  ${QJS_DIR}/quickjs.c)
+target_include_directories(quickjs PUBLIC ${QJS_DIR})
+target_compile_definitions(quickjs PRIVATE _GNU_SOURCE)
+target_compile_options(quickjs PRIVATE -w)
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2 SDL2_ttf)
+find_package(ZLIB REQUIRED)
+
+add_executable(openfront
+  src/main.c src/engine.c src/render.c src/text.c src/input.c)
+target_compile_options(openfront PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+target_link_libraries(openfront PRIVATE quickjs PkgConfig::SDL2 ZLIB::ZLIB m pthread)
