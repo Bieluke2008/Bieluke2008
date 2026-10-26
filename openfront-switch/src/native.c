@@ -399,11 +399,7 @@ static JSValue heap_enqueue(JSContext *ctx, JSValueConst this_val, int argc, JSV
     return JS_UNDEFINED;
 }
 
-static JSValue heap_dequeue(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    (void)argc, (void)argv;
-    Heap *h = JS_GetOpaque2(ctx, this_val, heap_class);
-    if (!h) return JS_EXCEPTION;
-    if (h->len == 0) return JS_ThrowPlainError(ctx, "heap empty");
+static uint32_t heap_pop(Heap *h) {
     uint32_t top = h->tiles[0];
     float last_pri = h->pri[--h->len];
     uint32_t last_tile = h->tiles[h->len];
@@ -420,7 +416,15 @@ static JSValue heap_dequeue(JSContext *ctx, JSValueConst this_val, int argc, JSV
     }
     h->pri[i] = last_pri;
     h->tiles[i] = last_tile;
-    return num(top);
+    return top;
+}
+
+static JSValue heap_dequeue(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)argc, (void)argv;
+    Heap *h = JS_GetOpaque2(ctx, this_val, heap_class);
+    if (!h) return JS_EXCEPTION;
+    if (h->len == 0) return JS_ThrowPlainError(ctx, "heap empty");
+    return num(heap_pop(h));
 }
 
 static const JSCFunctionListEntry heap_proto[] = {
@@ -810,7 +814,7 @@ static const JSCFunctionListEntry iter_proto[] = {
 
 // --- Kernels: whole engine methods whose loops run per tile ------------------------------
 
-static JSAtom atom_s[4], atom_add_border;
+static JSAtom atom_s[4], atom_add_border, atom_remove_border, atom_border_tiles;
 
 /** PseudoRandom.next() on the object's sfc32 state words s0..s3. */
 typedef struct {
@@ -1103,6 +1107,80 @@ static JSValue js_name_rect(JSContext *ctx, JSValueConst this_val, int argc, JSV
     return JS_NewArrayFrom(ctx, 4, vals);
 }
 
+/**
+ * The skip path of AttackExecution.tick()'s conquer loop: dequeues tiles
+ * (dropping each from the attack's border) until one the attacker can take
+ * now, i.e. still the target's, touching the attacker, passable land.
+ * nextConquerTile(heap, attack, ownerSmallID, targetSmallID) -> tile, or -1
+ * once the heap is empty.
+ */
+static JSValue js_next_conquer_tile(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 4 || nmaps == 0) return JS_ThrowTypeError(ctx, "nextConquerTile: bad arguments");
+    const NMap *m = &maps[0];
+    Heap *h = JS_GetOpaque2(ctx, argv[0], heap_class);
+    if (!h) return JS_EXCEPTION;
+    unsigned owner = (unsigned)iarg(ctx, argv[2]), target = (unsigned)iarg(ctx, argv[3]);
+    JSValue remove = JS_GetProperty(ctx, argv[1], atom_remove_border);
+    int64_t w = m->w, found = -1;
+    while (h->len > 0) {
+        int64_t tile = heap_pop(h);
+        JSValue a = num(tile);
+        JSValue r = JS_Call(ctx, remove, argv[1], 1, &a);
+        if (JS_IsException(r)) {
+            JS_FreeValue(ctx, remove);
+            return r;
+        }
+        JS_FreeValue(ctx, r);
+        int64_t x = xof(m, tile);
+        bool on_border = (tile >= w && owner_id(m, tile - w) == owner) ||
+                         (tile < (m->h - 1) * w && owner_id(m, tile + w) == owner) ||
+                         (x != 0 && owner_id(m, tile - 1) == owner) || (x != w - 1 && owner_id(m, tile + 1) == owner);
+        if (owner_id(m, tile) != target || !on_border) continue;
+        if (!is_land(m, tile) || is_impassable(m, tile)) continue;
+        found = tile;
+        break;
+    }
+    JS_FreeValue(ctx, remove);
+    return num(found);
+}
+
+/** GameImpl.updateBorderStatus(t): files t under its owner's border tiles or not. */
+static int border_status(JSContext *ctx, const NMap *m, JSValueConst players, int64_t t) {
+    unsigned sid = owner_id(m, t);
+    if (sid == 0) return 0;
+    JSValue p = JS_GetPropertyUint32(ctx, players, sid - 1);
+    JSValue bt = JS_GetProperty(ctx, p, atom_border_tiles);
+    JS_FreeValue(ctx, p);
+    TSet *set = JS_GetOpaque2(ctx, bt, set_class);
+    JS_FreeValue(ctx, bt);  // the player keeps it alive
+    if (!set) return -1;
+    int64_t w = m->w, x = xof(m, t);
+    bool border = (x != 0 && owner_id(m, t - 1) != sid) || (x != w - 1 && owner_id(m, t + 1) != sid) ||
+                  (t >= w && owner_id(m, t - w) != sid) || (t < (m->h - 1) * w && owner_id(m, t + w) != sid);
+    if (border) ts_add(set, (uint32_t)t);
+    else ts_delete(set, (uint32_t)t);
+    return 0;
+}
+
+/** GameImpl.updateBorders(tile): updateBorders(tile, playersBySmallID). */
+static JSValue js_update_borders(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 2 || nmaps == 0) return JS_ThrowTypeError(ctx, "updateBorders: bad arguments");
+    const NMap *m = &maps[0];
+    int64_t tile = iarg(ctx, argv[0]), w = m->w, x = xof(m, tile), nb[5];
+    int n = 0;
+    nb[n++] = tile;
+    if (tile >= w) nb[n++] = tile - w;
+    if (tile < (m->h - 1) * w) nb[n++] = tile + w;
+    if (x != 0) nb[n++] = tile - 1;
+    if (x != w - 1) nb[n++] = tile + 1;
+    for (int i = 0; i < n; i++) {
+        if (border_status(ctx, m, argv[1], nb[i]) < 0) return JS_EXCEPTION;
+    }
+    return JS_UNDEFINED;
+}
+
 // --- Install ----------------------------------------------------------------------------
 
 static JSValue make_class(JSContext *ctx, JSClassID *id, const char *name, JSClassFinalizer *fin, JSClassGCMark *mark,
@@ -1132,9 +1210,13 @@ void native_install(JSContext *ctx) {
     JS_SetPropertyStr(ctx, n, "addNeighbors", JS_NewCFunction(ctx, js_add_neighbors, "addNeighbors", 7));
     JS_SetPropertyStr(ctx, n, "clusters", JS_NewCFunction(ctx, js_clusters, "clusters", 4));
     JS_SetPropertyStr(ctx, n, "nameRect", JS_NewCFunction(ctx, js_name_rect, "nameRect", 6));
+    JS_SetPropertyStr(ctx, n, "nextConquerTile", JS_NewCFunction(ctx, js_next_conquer_tile, "nextConquerTile", 4));
+    JS_SetPropertyStr(ctx, n, "updateBorders", JS_NewCFunction(ctx, js_update_borders, "updateBorders", 2));
     static const char *snames[4] = {"s0", "s1", "s2", "s3"};
     for (int i = 0; i < 4; i++) atom_s[i] = JS_NewAtom(ctx, snames[i]);
     atom_add_border = JS_NewAtom(ctx, "addBorderTile");
+    atom_remove_border = JS_NewAtom(ctx, "removeBorderTile");
+    atom_border_tiles = JS_NewAtom(ctx, "_borderTiles");
     JS_SetPropertyStr(ctx, n, "FlatBinaryHeap",
                       make_class(ctx, &heap_class, "FlatBinaryHeap", heap_finalizer, NULL, heap_proto,
                                  (int)(sizeof heap_proto / sizeof heap_proto[0]), (JSCFunction *)heap_ctor));
