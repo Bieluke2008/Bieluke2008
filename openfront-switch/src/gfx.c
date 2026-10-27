@@ -836,3 +836,25 @@ void gfx_shutdown(void) {
     IMG_Quit();
     TTF_Quit();
 }
+
+void gfx_upper(char *s) {
+    for (unsigned char *c = (unsigned char *)s; *c; c++) {
+        if (*c >= 'a' && *c <= 'z') {
+            *c = (unsigned char)(*c - 32);
+        } else if (*c == 0xC3 && c[1] >= 0xA0 && c[1] <= 0xBE && c[1] != 0xB7) {
+            c[1] = (unsigned char)(c[1] - 0x20);  // à..þ -> À..Þ (not ÷)
+            c++;
+        } else if ((*c == 0xC4 || *c == 0xC5) && c[1] >= 0x80 && c[1] <= 0xBF) {
+            // Latin Extended-A pairs: upper even, lower odd (ı, ĸ, ŉ and ſ aside).
+            unsigned cp = ((unsigned)(*c & 0x1F) << 6) | (c[1] & 0x3F);
+            bool odd_lower = (cp >= 0x100 && cp <= 0x137 && cp != 0x131) || (cp >= 0x14A && cp <= 0x177);
+            bool even_lower = (cp >= 0x139 && cp <= 0x148) || (cp >= 0x179 && cp <= 0x17E);
+            if ((odd_lower && (cp & 1)) || (even_lower && !(cp & 1))) {
+                cp -= 1;
+                c[0] = (unsigned char)(0xC0 | (cp >> 6));
+                c[1] = (unsigned char)(0x80 | (cp & 0x3F));
+            }
+            c++;
+        }
+    }
+}

@@ -12,13 +12,18 @@ import {
   GameMapType,
   GameMode,
   GameType,
+  HumansVsNations,
   maps,
   PlayerType,
+  Duos,
+  Quads,
+  Trios,
   UnitType,
 } from "@openfront/engine-api/game/GameTypes";
+import { DOOMSDAY_CLOCK_SPEEDS } from "@openfront/engine-lib/game/DoomsdayClock";
 import { ErrorUpdate, GameUpdateViewData } from "@openfront/engine-api/game/GameUpdates";
 import { MapManifest } from "@openfront/engine-api/game/MapFiles";
-import { flattenedEmojiTable, GameStartInfo, StampedIntent } from "@openfront/engine-api/Schemas";
+import { flattenedEmojiTable, GameStartInfo, StampedIntent, TeamCountConfig } from "@openfront/engine-api/Schemas";
 import { renderTroops } from "@openfront/engine-lib/Format";
 import { createGameRunner } from "@openfront/engine/GameRunner";
 import type { Unit } from "@openfront/engine/game/Game";
@@ -130,8 +135,35 @@ interface StartOptions {
   instantBuild?: boolean;
   infiniteGold?: boolean;
   infiniteTroops?: boolean;
+  randomSpawn?: boolean;
+  waterNukes?: boolean;
+  gameMode?: number; // 0 FFA, 1 teams
+  teamCount?: number; // index into TEAM_COUNTS
+  doomsdaySpeed?: number; // index into DOOMSDAY_CLOCK_SPEEDS, -1 off
+  maxTimer?: number; // minutes
+  goldMultiplier?: number;
+  startingGold?: number; // millions
+  allianceMinutes?: number;
+  overtime?: number; // minutes
+  disabledUnits?: number; // bit i: SOLO_UNIT_OPTIONS[i] off
   seed?: string;
 }
+
+// GameConfigSettings' team count options and unit options, in its order.
+const TEAM_COUNTS: TeamCountConfig[] = [2, 3, 4, 5, 6, 7, Quads, Trios, Duos, HumansVsNations];
+const SOLO_UNIT_OPTIONS: UnitType[] = [
+  UnitType.City,
+  UnitType.DefensePost,
+  UnitType.Port,
+  UnitType.Warship,
+  UnitType.TransportShip,
+  UnitType.MissileSilo,
+  UnitType.SAMLauncher,
+  UnitType.AtomBomb,
+  UnitType.HydrogenBomb,
+  UnitType.MIRV,
+  UnitType.Factory,
+];
 
 let error: string | null = null;
 let turnNumber = 0;
@@ -168,26 +200,38 @@ async function start(opts: StartOptions): Promise<void> {
     return new Uint8Array(b);
   };
   const difficulty = [Difficulty.Easy, Difficulty.Medium, Difficulty.Hard, Difficulty.Impossible][opts.difficulty];
+  const teams = opts.gameMode === 1;
   const gameStart = {
     // A fixed seed (benchmarks) makes the game, bots and nations repeat.
     gameID: opts.seed ? "SWITCH" + opts.seed : "SWITCH" + Math.floor(host.now()).toString(36).toUpperCase(),
     lobbyCreatedAt: 0,
     players: [{ clientID: CLIENT_ID, username: opts.name, clanTag: null }],
+    // SinglePlayerModal.startGame()'s config.
     config: {
       gameMap: entry.type,
       gameMapSize: GameMapSize.Compact,
       gameType: GameType.Singleplayer,
-      gameMode: GameMode.FFA,
+      gameMode: teams ? GameMode.Team : GameMode.FFA,
+      playerTeams: TEAM_COUNTS[opts.teamCount ?? 0] ?? 2,
       difficulty,
+      maxTimerValue: opts.maxTimer !== undefined ? Math.max(1, Math.min(120, opts.maxTimer)) : undefined,
       bots: opts.bots,
       nations: opts.nations < 0 ? "default" : opts.nations === 0 ? "disabled" : opts.nations,
       infiniteGold: opts.infiniteGold ?? false,
       infiniteTroops: opts.infiniteTroops ?? false,
-      donateGold: false,
-      donateTroops: false,
+      donateGold: teams,
+      donateTroops: teams,
       instantBuild: opts.instantBuild ?? false,
-      randomSpawn: false,
-      disabledUnits: [],
+      randomSpawn: opts.randomSpawn ?? false,
+      disabledUnits: SOLO_UNIT_OPTIONS.filter((_, i) => ((opts.disabledUnits ?? 0) >> i) & 1),
+      ...(opts.goldMultiplier ? { goldMultiplier: opts.goldMultiplier } : {}),
+      ...(opts.startingGold !== undefined ? { startingGold: Math.round(opts.startingGold * 1_000_000) } : {}),
+      ...(opts.allianceMinutes !== undefined ? { customAllianceDuration: opts.allianceMinutes } : {}),
+      ...(opts.waterNukes ? { waterNukes: true } : {}),
+      ...(opts.doomsdaySpeed !== undefined && opts.doomsdaySpeed >= 0
+        ? { doomsdayClock: { enabled: true, speed: DOOMSDAY_CLOCK_SPEEDS[opts.doomsdaySpeed] ?? "normal" } }
+        : {}),
+      ...(opts.overtime !== undefined ? { overtime: { enabled: true, startMinutes: opts.overtime } } : {}),
     },
   } as unknown as GameStartInfo;
   S.runner = await createGameRunner(
@@ -444,6 +488,12 @@ const OF = {
   mapHeadings(i: number): string[] {
     const m = mapList()[i];
     return [m.section, m.group];
+  },
+
+  /** The map's own nation count (the Solo modal's nations slider default). */
+  mapNations(i: number): number {
+    const manifest = loadJson(ROMFS + "maps/" + mapList()[i].folder + "/manifest.json") as MapManifest | null;
+    return manifest?.nations.length ?? 0;
   },
 
   start(opts: StartOptions): void {

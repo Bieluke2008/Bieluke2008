@@ -54,6 +54,18 @@ static const char *const STRINGS[] = {
     "game_settings.start", "game_settings.instant_build", "game_settings.infinite_gold",
     "game_settings.infinite_troops", "game_settings.compact_map", "map_component.search_maps", "common.disabled",
     // The port's own
+    // Solo options
+    "common.map_default", "game_mode.ffa", "game_mode.teams", "host_modal.mode", "host_modal.team_count",
+    "host_modal.teams_Quads", "host_modal.teams_Trios", "host_modal.teams_Duos",
+    "host_modal.teams_Humans Vs Nations", "public_lobby.teams", "game_settings.random_spawn",
+    "game_settings.water_nukes", "game_settings.doomsday_clock", "doomsday_clock_speed.slow",
+    "doomsday_clock_speed.normal", "doomsday_clock_speed.fast", "doomsday_clock_speed.veryfast",
+    "game_settings.max_timer", "game_settings.gold_multiplier", "game_settings.starting_gold",
+    "game_settings.custom_alliances", "game_settings.overtime", "public_game_modifier.disable_alliances",
+    "game_settings.disable_units", "unit_type.city", "unit_type.defense_post", "unit_type.port", "unit_type.warship",
+    "unit_type.boat", "unit_type.missile_silo", "unit_type.sam_launcher", "unit_type.atom_bomb",
+    "unit_type.hydrogen_bomb", "unit_type.mirv", "unit_type.factory",
+    "private_lobby.disabled_units",
     // Audio tab
     "user_setting.tab_audio", "user_setting.audio_master", "user_setting.audio_master_desc",
     "user_setting.audio_music", "user_setting.audio_music_desc", "user_setting.audio_effects",

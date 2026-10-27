@@ -3,6 +3,9 @@
 // timer, HeadsUpMessage and AttacksDisplay. One JSON model per tick.
 import {
   BuildMenus,
+  Difficulty,
+  GameMapSize,
+  GameMode,
   GameType,
   MessageType,
   UnitType,
@@ -348,14 +351,84 @@ function headsUp(): string | null {
 }
 
 /** SettingsModal's modifier tags for this game. */
+// LobbySettingsSummary.notableLobbySettings + lobbySettingTagText: the
+// game's non-default settings as tags (the in-game menu's Modifiers).
+function renderDuration(totalSeconds: number): string {
+  const whole = Math.floor(totalSeconds);
+  if (whole <= 0) return `0${t("common.duration_second_short")}`;
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const seconds = whole % 60;
+  const parts: string[] = [];
+  if (hours > 0) parts.push(`${hours}${t("common.duration_hour_short")}`);
+  if (minutes > 0) parts.push(`${minutes}${t("common.duration_minute_short")}`);
+  if (seconds > 0 || parts.length === 0) parts.push(`${seconds}${t("common.duration_second_short")}`);
+  return parts.join(" ");
+}
+
 function modifiers(): string[] {
-  const cfg = game().config().gameConfig();
-  const out: string[] = [];
-  if (cfg.infiniteGold) out.push(t("game_settings.infinite_gold"));
-  if (cfg.infiniteTroops) out.push(t("game_settings.infinite_troops"));
-  if (cfg.instantBuild) out.push(t("game_settings.instant_build"));
-  if (cfg.gameMapSize === "Compact") out.push(t("game_settings.compact_map"));
-  return out;
+  const c = game().config().gameConfig();
+  const isTeam = c.gameMode === GameMode.Team;
+  const enabled = t("common.enabled");
+  const disabled = t("common.disabled");
+  const items: { label: string; value: string }[] = [];
+  const on = (key: string) => items.push({ label: t(key), value: enabled });
+  if (c.nations !== "disabled" && c.difficulty !== Difficulty.Easy && c.gameType === GameType.Private)
+    items.push({ label: t("difficulty.difficulty"), value: t(`difficulty.${c.difficulty.toLowerCase()}`) });
+  if (c.infiniteTroops) on("game_settings.infinite_troops");
+  if (c.infiniteGold) on("game_settings.infinite_gold");
+  if (c.instantBuild) on("game_settings.instant_build");
+  if (c.randomSpawn) on("game_settings.random_spawn");
+  if (c.maxTimerValue) items.push({ label: t("private_lobby.game_length"), value: renderDuration(c.maxTimerValue * 60) });
+  if (c.startingGold)
+    items.push({ label: t("private_lobby.starting_gold"), value: `${parseFloat((c.startingGold / 1_000_000).toPrecision(12))}M` });
+  if (c.goldMultiplier) items.push({ label: t("game_settings.gold_multiplier"), value: `x${c.goldMultiplier}` });
+  if (c.customAllianceDuration === 0 || c.disableAlliances)
+    items.push({ label: t("public_game_modifier.disable_alliances_label"), value: disabled });
+  else if (typeof c.customAllianceDuration === "number" && c.customAllianceDuration !== 5)
+    items.push({
+      label: t("public_game_modifier.disable_alliances_label"),
+      value: renderDuration(c.customAllianceDuration * 60),
+    });
+  if (c.waterNukes) on("game_settings.water_nukes");
+  if (c.doomsdayClock?.enabled)
+    items.push({ label: t("game_settings.doomsday_clock"), value: t(`doomsday_clock_speed.${c.doomsdayClock.speed ?? "normal"}`) });
+  if (c.overtime?.enabled)
+    items.push({ label: t("overtime.title"), value: renderDuration((c.overtime.startMinutes ?? 30) * 60) });
+  if ((isTeam && !c.donateGold) || (!isTeam && c.donateGold))
+    items.push({ label: t("host_modal.donate_gold"), value: c.donateGold ? enabled : disabled });
+  if ((isTeam && !c.donateTroops) || (!isTeam && c.donateTroops))
+    items.push({ label: t("host_modal.donate_troops"), value: c.donateTroops ? enabled : disabled });
+  const isCompact = c.gameMapSize === GameMapSize.Compact;
+  if (isCompact) on("game_settings.compact_map");
+  if (c.bots !== (isCompact ? 100 : 400)) items.push({ label: t("game_settings.bots"), value: String(c.bots) });
+  if (typeof c.nations === "number") items.push({ label: t("game_settings.nations"), value: String(c.nations) });
+  if (c.nations === "disabled") items.push({ label: t("game_settings.nations"), value: disabled });
+  return items.map((s) => {
+    const label = s.label.replace(/[:\uFF1A\s]+$/u, "");
+    return s.value === enabled ? label : `${label}: ${s.value}`;
+  });
+}
+
+// disabledUnitsBox: the units the game turned off.
+const UNIT_TYPE_KEYS: Record<string, string> = {
+  City: "unit_type.city",
+  "Defense Post": "unit_type.defense_post",
+  Port: "unit_type.port",
+  Warship: "unit_type.warship",
+  "Transport": "unit_type.boat",
+  "Missile Silo": "unit_type.missile_silo",
+  "SAM Launcher": "unit_type.sam_launcher",
+  "Atom Bomb": "unit_type.atom_bomb",
+  "Hydrogen Bomb": "unit_type.hydrogen_bomb",
+  MIRV: "unit_type.mirv",
+  Factory: "unit_type.factory",
+};
+
+function disabledUnits(): string[] {
+  return (game().config().gameConfig().disabledUnits ?? []).map((u) =>
+    UNIT_TYPE_KEYS[u] ? t(UNIT_TYPE_KEYS[u]) : String(u),
+  );
 }
 
 // --- The model -------------------------------------------------------------------
@@ -377,6 +450,7 @@ export function frameModel(): string {
     events: eventsModel(),
     winner,
     modifiers: modifiers(),
+    disabledUnits: disabledUnits(),
     msgType: MessageType.CHAT,
   });
 }

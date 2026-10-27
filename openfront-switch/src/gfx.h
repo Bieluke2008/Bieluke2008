@@ -107,6 +107,8 @@ float gfx_text_outline(Font f, float px, const char *s, float x, float y, SDL_Co
 float gfx_text_baseline(Font f, float px, const char *s, float x, float baseline, SDL_Color c, SDL_Color outline,
                         float ow, Align a);
 float gfx_text_width(Font f, float px, const char *s);
+/** CSS text-transform: uppercase for UTF-8: ASCII, Latin-1 and Latin Extended-A letters. */
+void gfx_upper(char *s);
 /** Truncates `s` with an ellipsis to fit `max_w`; returns `out`. */
 const char *gfx_ellipsize(Font f, float px, const char *s, float max_w, char *out, size_t n);
 /** Wraps into lines no wider than max_w; returns the line count (lines are NUL-separated in out). */

@@ -637,6 +637,17 @@ static void do_start(const StartOptions *o) {
     JS_SetPropertyStr(ctx, opts, "instantBuild", JS_NewBool(ctx, o->instant_build));
     JS_SetPropertyStr(ctx, opts, "infiniteGold", JS_NewBool(ctx, o->infinite_gold));
     JS_SetPropertyStr(ctx, opts, "infiniteTroops", JS_NewBool(ctx, o->infinite_troops));
+    JS_SetPropertyStr(ctx, opts, "randomSpawn", JS_NewBool(ctx, o->random_spawn));
+    JS_SetPropertyStr(ctx, opts, "waterNukes", JS_NewBool(ctx, o->water_nukes));
+    JS_SetPropertyStr(ctx, opts, "gameMode", JS_NewInt32(ctx, o->game_mode));
+    JS_SetPropertyStr(ctx, opts, "teamCount", JS_NewInt32(ctx, o->team_count));
+    JS_SetPropertyStr(ctx, opts, "doomsdaySpeed", JS_NewInt32(ctx, o->doomsday ? o->doomsday_speed : -1));
+    if (o->max_timer_on) JS_SetPropertyStr(ctx, opts, "maxTimer", JS_NewFloat64(ctx, o->max_timer));
+    if (o->gold_mult_on) JS_SetPropertyStr(ctx, opts, "goldMultiplier", JS_NewFloat64(ctx, o->gold_mult));
+    if (o->starting_gold_on) JS_SetPropertyStr(ctx, opts, "startingGold", JS_NewFloat64(ctx, o->starting_gold));
+    if (o->alliance_on) JS_SetPropertyStr(ctx, opts, "allianceMinutes", JS_NewFloat64(ctx, o->alliance_minutes));
+    if (o->overtime_on) JS_SetPropertyStr(ctx, opts, "overtime", JS_NewFloat64(ctx, o->overtime));
+    JS_SetPropertyStr(ctx, opts, "disabledUnits", JS_NewInt32(ctx, (int32_t)o->disabled_units));
     if (getenv("OPENFRONT_SEED")) JS_SetPropertyStr(ctx, opts, "seed", JS_NewString(ctx, getenv("OPENFRONT_SEED")));
     call_void("start", 1, &opts);
     JSValue ok = call("ready", 0, NULL);
@@ -732,6 +743,7 @@ static bool load_engine(void) {
     maps.map_folders = calloc((size_t)maps.nmaps + 1, NAME_LEN);
     maps.map_sections = calloc((size_t)maps.nmaps + 1, NAME_LEN);
     maps.map_groups = calloc((size_t)maps.nmaps + 1, NAME_LEN);
+    maps.map_nations = calloc((size_t)maps.nmaps + 1, sizeof(int));
     for (int i = 0; i < maps.nmaps; i++) {
         JSValue v = JS_GetPropertyUint32(ctx, list, (uint32_t)i);
         to_buf(v, maps.map_names[i], NAME_LEN);
@@ -748,6 +760,12 @@ static bool load_engine(void) {
         JS_FreeValue(ctx, sec);
         JS_FreeValue(ctx, grp);
         JS_FreeValue(ctx, h);
+        idx = JS_NewInt32(ctx, i);
+        JSValue nn = call("mapNations", 1, &idx);
+        int32_t nv = 0;
+        JS_ToInt32(ctx, &nv, nn);
+        maps.map_nations[i] = nv;
+        JS_FreeValue(ctx, nn);
     }
     JS_FreeValue(ctx, list);
 

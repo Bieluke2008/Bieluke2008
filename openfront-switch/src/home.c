@@ -79,12 +79,6 @@ static void edit_name(StartOptions *o) {
 #endif
 }
 
-static void upper(char *s) {
-    for (; *s; s++) {
-        if (*s >= 'a' && *s <= 'z') *s = (char)(*s - 32);
-    }
-}
-
 /** renderSmallActionCard: a rounded, uppercase action button. */
 static bool action(const char *id, Rect r, const char *label, bool primary, float px) {
     uint32_t uid = ui_id(id, 0);
@@ -95,7 +89,7 @@ static bool action(const char *id, Rect r, const char *label, bool primary, floa
     else gfx_box(d, 10, hex(hover ? 0x2a1834 : ITEM_BG), 1, hex(ITEM_BORDER));
     char t[64];
     snprintf(t, sizeof t, "%s", label);
-    upper(t);
+    gfx_upper(t);
     gfx_text(primary ? FONT_700 : FONT_600, px, t, r.x + r.w / 2, r.y + r.h / 2 - px * 0.7f, px * 1.4f, hex(TW_WHITE),
              ALIGN_CENTER);
     return ui_button(uid, r);
@@ -116,7 +110,7 @@ HomeResult home_draw(StartOptions *o, const Input *in) {
     // UsernameInput.
     char l[64];
     snprintf(l, sizeof l, "%s", T("port.name"));
-    upper(l);
+    gfx_upper(l);
     gfx_text(FONT_700, 13, l, X, 292, 18, hex(LABEL), ALIGN_LEFT);
     Rect nr = {X, 316, W, 52};
     uint32_t nid = ui_id("home-name", 0);

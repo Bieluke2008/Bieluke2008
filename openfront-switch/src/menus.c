@@ -837,9 +837,7 @@ static void emoji_table(void) {
         float sw = cols ? (float)cols * 60 - 4 : inner.w;
         char title[64];
         snprintf(title, sizeof title, "%s", jstr(sec, "title", ""));
-        for (char *c = title; *c; c++) {
-            if (*c >= 'a' && *c <= 'z') *c = (char)(*c - 32);
-        }
+        gfx_upper(title);
         gfx_text(FONT_600, 11, title, sx, y, 17, hex(TW_ZINC_400), ALIGN_LEFT);
         float gy = y + 17 + 4;
         int per_row = cols ? cols : 10;
@@ -962,15 +960,41 @@ static bool menu_row(int idx, float x, float y, float w, const char *icon, const
     return ui_button(id, r);
 }
 
+/**
+ * Wraps the strings of `arr` as uppercase chips (LOBBY_SETTING_TAG) across
+ * `w` from (x, y); draws them when `draw`. Returns the height used.
+ */
+static float chips(const cJSON *arr, float x, float y, float w, SDL_Color bg, SDL_Color fg, bool draw) {
+    float cx = x, cy = y;
+    const float H = 21, GAP = 4;
+    for (int i = 0; i < jlen(arr); i++) {
+        const cJSON *m = jat(arr, i);
+        char up[96];
+        snprintf(up, sizeof up, "%s", cJSON_IsString(m) ? m->valuestring : "");
+        gfx_upper(up);
+        float mw = gfx_text_width(FONT_700, 11, up) + 12;
+        if (cx > x && cx + mw > x + w) cx = x, cy += H + GAP;
+        if (draw) {
+            gfx_fill_rrect((Rect){cx, cy, mw, H}, 4, bg);
+            gfx_text(FONT_700, 11, up, cx + 6, cy + 2, 17, fg, ALIGN_LEFT);
+        }
+        cx += mw + GAP;
+    }
+    return jlen(arr) ? cy + H - y : 0;
+}
+
 static void settings_modal(void) {
     if (backdrop("menu-bg", rgba(0, 0, 0, 153))) {
         app_open_modal(MODAL_NONE, -1);
         return;
     }
     const cJSON *mods = jget(app.frame, "modifiers");
-    bool has_mods = jlen(mods) > 0;
+    const cJSON *units = jget(app.frame, "disabledUnits");
+    bool has_mods = jlen(mods) > 0 || jlen(units) > 0;
     const float W = 448;
-    float h = 61 + 16 + 68 + 12 + 68 + 12 + 68 + (has_mods ? 12 + 16 + 62 : 0) + 12 + 16 + 13 + 68 + 16;
+    float mods_h = jlen(mods) ? 24 + chips(mods, 0, 0, W - 58, hex(0), hex(0), false) + 8 : 0;
+    float units_h = jlen(units) ? 8 + 12 + 24 + chips(units, 0, 0, W - 82, hex(0), hex(0), false) + 12 : 0;
+    float h = 61 + 16 + 68 + 12 + 68 + 12 + 68 + (has_mods ? 12 + 16 + mods_h + units_h : 0) + 12 + 16 + 13 + 68 + 16;
     Rect card = {PAGE_W / 2.0f - W / 2, PAGE_H / 2.0f - h / 2, W, h};
     gfx_box(card, 8, hex(SLATE_800), 1, hex(TW_SLATE_600));
     ui_block(card);
@@ -1006,28 +1030,27 @@ static void settings_modal(void) {
     }
     y += 68;
     if (has_mods) {
+        // SettingsModal.renderModifiers: the tags, then the disabled units' red box.
         y += 12 + 16;
         gfx_fill_rect((Rect){x, y - 13, w, 1}, hex(TW_SLATE_600));
         char title[64];
         snprintf(title, sizeof title, "%s", T("user_setting.modifiers"));
-        for (char *c = title; *c; c++) {
-            if (*c >= 'a' && *c <= 'z') *c = (char)(*c - 32);
-        }
+        gfx_upper(title);
         gfx_text(FONT_600, 12, title, x + 12, y, 24, hex(TW_SLATE_400), ALIGN_LEFT);
-        float mx = x + 12;
-        for (int i = 0; i < jlen(mods); i++) {
-            const cJSON *m = jat(mods, i);
-            char up[64];
-            snprintf(up, sizeof up, "%s", cJSON_IsString(m) ? m->valuestring : "");
-            for (char *c = up; *c; c++) {
-                if (*c >= 'a' && *c <= 'z') *c = (char)(*c - 32);
-            }
-            float mw = gfx_text_width(FONT_700, 11, up) + 12;
-            gfx_fill_rrect((Rect){mx, y + 28, mw, 21}, 4, hex(MALIBU_BLUE));
-            gfx_text(FONT_700, 11, up, mx + 6, y + 30, 17, hex(TW_WHITE), ALIGN_LEFT);
-            mx += mw + 4;
+        float my = y + 24;
+        if (jlen(mods)) my += chips(mods, x + 12, my, w - 24, hex(MALIBU_BLUE), hex(TW_WHITE), true) + 8;
+        if (jlen(units)) {
+            float ch = chips(units, 0, 0, w - 48, hex(0), hex(0), false);
+            Rect box = {x + 12, my + 8, w - 24, 12 + 24 + ch + 12};
+            gfx_box(box, 8, rgba(239, 68, 68, 26), 1, rgba(239, 68, 68, 51));
+            char ut[64];
+            snprintf(ut, sizeof ut, "%s", T("private_lobby.disabled_units"));
+            gfx_upper(ut);
+            gfx_text(FONT_700, 12, ut, box.x + 12, box.y + 10, 18, hex(0xf87171), ALIGN_LEFT);
+            chips(units, box.x + 12, box.y + 34, box.w - 24, rgba(239, 68, 68, 51), hex(0xfecaca), true);
+            my = box.y + box.h;
         }
-        y += 62 - 16;
+        y = my - 16;
     }
     y += 12 + 13;
     gfx_fill_rect((Rect){x, y - 13, w, 1}, hex(TW_SLATE_600));
@@ -1057,14 +1080,10 @@ static void exit_confirm(void) {
     gfx_fill_rrect(ok, 12, hex(oh ? TW_RED_700 : RED_600));
     char l[64];
     snprintf(l, sizeof l, "%s", T("common.cancel"));
-    for (char *c = l; *c; c++) {
-        if (*c >= 'a' && *c <= 'z') *c = (char)(*c - 32);
-    }
+    gfx_upper(l);
     gfx_text(FONT_700, 12, l, cancel.x + bw / 2, cancel.y + 11, 16, rgba(255, 255, 255, ch ? 204 : 153), ALIGN_CENTER);
     snprintf(l, sizeof l, "%s", T("common.confirm"));
-    for (char *c = l; *c; c++) {
-        if (*c >= 'a' && *c <= 'z') *c = (char)(*c - 32);
-    }
+    gfx_upper(l);
     gfx_text(FONT_700, 12, l, ok.x + bw / 2, ok.y + 11, 16, hex(TW_WHITE), ALIGN_CENTER);
     if (ui_button(cid, cancel)) app_open_modal(MODAL_NONE, -1);
     if (ui_button(oid, ok)) {

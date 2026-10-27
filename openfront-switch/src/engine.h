@@ -10,12 +10,21 @@
 #define MAX_PLAYERS 4096
 #define NAME_LEN 64
 
+/** The Solo modal's game config (SinglePlayerModal.startGame). */
 typedef struct {
     int map;          // index into the engine's map list
     int difficulty;   // 0 easy .. 3 impossible
     int bots;         // tribes
     int nations;      // -1 = map default, 0 = none
-    bool instant_build, infinite_gold, infinite_troops;
+    bool instant_build, infinite_gold, infinite_troops, random_spawn, water_nukes;
+    int game_mode;    // 0 free for all, 1 teams
+    int team_count;   // index into the team count options (2..7, quads, trios, duos, humans vs nations)
+    bool doomsday;
+    int doomsday_speed;  // 0 slow, 1 normal, 2 fast, 3 very fast
+    // The toggle-input cards: on/off and their value.
+    bool max_timer_on, gold_mult_on, starting_gold_on, alliance_on, overtime_on;
+    double max_timer, gold_mult, starting_gold, alliance_minutes, overtime;
+    unsigned disabled_units;  // bit i: the Solo modal's unit option i is off
     char name[NAME_LEN];
 } StartOptions;
 
@@ -109,6 +118,7 @@ typedef struct {
     char (*map_folders)[NAME_LEN];
     char (*map_sections)[NAME_LEN];  // picker section heading map i opens, "" if none
     char (*map_groups)[NAME_LEN];    // group heading within it, "" if none
+    int *map_nations;                // the map's own nation count
 } MapList;
 
 /**
