@@ -15,6 +15,7 @@
 
 #include "app.h"
 #include "gfx.h"
+#include "home.h"
 #include "map.h"
 #include "ui.h"
 
@@ -172,19 +173,9 @@ static float slider_box(int idx, Rect box, const char *label, const char *value,
 
 SoloResult solo_draw(StartOptions *o, int *speed_idx, const Input *in) {
     const MapList *ml = engine_maps();
-    SDL_Renderer *ren = gfx_renderer();
-    SDL_SetRenderDrawColor(ren, 0x0a, 0x06, 0x0f, 255);
-    SDL_RenderClear(ren);
     SoloResult result = SOLO_NONE;
-
-    // Header with the logo; footer with credits.
-    gfx_fill_rect((Rect){0, 0, PAGE_W, 88}, hex(HEADER_BG));
-    gfx_text(FONT_800, 22, ">OPENFRONT<", 208, 22, 26, hex(0xff4040), ALIGN_CENTER);
-    gfx_text(FONT_800, 12, "NINTENDO SWITCH", 208, 50, 16, hex(0xff8a1f), ALIGN_CENTER);
-    gfx_text(FONT_600, 16, T("port.title"), 1140, 34, 22, hex(0xb0a6b8), ALIGN_RIGHT);
-    gfx_fill_rect((Rect){0, 611, PAGE_W, 109}, hex(CARD_BG));
-    gfx_text(FONT_400, 12, T("port.credits"), PAGE_W / 2.0f, 690, 18, hex(0x8f8696), ALIGN_CENTER);
-    gfx_text(FONT_400, 12, "v" OPENFRONT_VERSION, PAGE_W / 2.0f, 668, 18, hex(0x8f8696), ALIGN_CENTER);
+    // The modal sits on the home page, as the web client's does.
+    home_backdrop();
 
     Rect card = {262, 107, 756, 494};
     gfx_box(card, 12, hex(CARD_BG), 1, hex(CARD_BORDER));

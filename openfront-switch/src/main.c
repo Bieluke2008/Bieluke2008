@@ -13,18 +13,20 @@
 #endif
 
 #include "app.h"
+#include "audio_panel.h"
 #include "clocks.h"
-#include "settings.h"
-#include "sound.h"
 #include "engine.h"
 #include "gfx.h"
+#include "home.h"
 #include "hud.h"
 #include "input.h"
 #include "json.h"
 #include "map.h"
 #include "menus.h"
 #include "radial.h"
+#include "settings.h"
 #include "solo.h"
+#include "sound.h"
 #include "ui.h"
 #include "units.h"
 
@@ -57,7 +59,7 @@ static const char *const STRINGS[] = {
     "user_setting.audio_music", "user_setting.audio_music_desc", "user_setting.audio_effects",
     "user_setting.audio_effects_desc", "user_setting.audio_alerts", "user_setting.audio_alerts_desc",
     "user_setting.audio_ambience", "user_setting.audio_ambience_desc", "user_setting.audio_interface",
-    "user_setting.audio_interface_desc", "user_setting.audio_test", "user_setting.audio_reset", "port.music_missing",
+    "user_setting.audio_interface_desc", "user_setting.audio_test", "user_setting.audio_reset", "port.music_missing", "port.home_hint",
     "port.title", "port.name", "port.speed", "port.loading", "port.controls", "port.controls_title", "port.quit",
     "port.default", "port.credits",
     NULL,
@@ -68,7 +70,8 @@ App app;
 static struct {
     SDL_Renderer *ren;
     const char *romfs;
-    enum { SCREEN_SOLO, SCREEN_GAME } screen;
+    enum { SCREEN_HOME, SCREEN_SOLO, SCREEN_GAME } screen;
+    bool home_audio;  // the Audio panel over the home page
     Input in;
     bool quit;
     StartOptions opts;
@@ -237,7 +240,7 @@ static void leave_game(void) {
     map_reset();
     menus_reset();
     radial_close();
-    G.screen = SCREEN_SOLO;
+    G.screen = SCREEN_HOME;
 }
 
 // --- Input ----------------------------------------------------------------------------------------
@@ -651,7 +654,7 @@ static void default_name(char *out, size_t n) {
 // plays the map (spawns, attacks around), and before the screenshot opens
 // the scene to check: radial, build, hover, panel, emoji, settings, exit,
 // send, chat, ghost, help, front (attack troop labels), bars (structure
-// progress bars), audio.
+// progress bars), audio, home (start page), menu (Solo setup).
 
 static struct {
     const char *map;
@@ -687,7 +690,11 @@ static int nearest_enemy(float *x, float *y) {
 }
 
 static void autoplay(int frame) {
-    if (test.scene && !strcmp(test.scene, "menu")) return;
+    if (test.scene && !strcmp(test.scene, "home")) return;
+    if (test.scene && !strcmp(test.scene, "menu")) {
+        G.screen = SCREEN_SOLO;
+        return;
+    }
     if (frame == 2) {
         const MapList *ml = engine_maps();
         for (int i = 0; i < ml->nmaps; i++) {
@@ -861,6 +868,10 @@ int main(int argc, char **argv) {
         if (strcmp(ml->map_folders[i], "britannia") == 0) G.opts.map = i;
     }
     solo_init(G.romfs);
+    home_init(G.romfs);
+    const char *saved_name = settings_str("name", NULL);
+    if (saved_name && saved_name[0]) snprintf(G.opts.name, sizeof G.opts.name, "%s", saved_name);
+    G.screen = SCREEN_HOME;
 
     G.last_frame = SDL_GetTicks();
     for (int frame = 0; !G.quit; frame++) {
@@ -884,18 +895,36 @@ int main(int argc, char **argv) {
             take_snapshot();
             autoplay(frame);
         }
-        if (G.screen == SCREEN_SOLO) {
+        if (G.screen == SCREEN_HOME || G.screen == SCREEN_SOLO) {
             Pointer p = make_pointer(&G.in);
             if (G.in.held[BTN_A]) a_was_held = true;
             else if (a_was_held) a_was_held = false, p.released = true;
             ui_begin(&p);
-            SoloResult r = solo_draw(&G.opts, &app.speed_idx, &G.in);
+            bool overlay = G.home_audio || app.help_visible;
+            Input in = G.in;
+            if (overlay) memset(in.pressed, 0, sizeof in.pressed);  // the page under an overlay stays still
+            if (G.screen == SCREEN_HOME) {
+                HomeResult h = home_draw(&G.opts, &in);
+                if (!overlay) {
+                    if (h == HOME_SOLO) G.screen = SCREEN_SOLO;
+                    if (h == HOME_AUDIO) G.home_audio = true;
+                    if (h == HOME_CONTROLS) app.help_visible = true;
+                    if (h == HOME_QUIT || G.in.pressed[BTN_MINUS]) G.quit = true;
+                }
+            } else {
+                SoloResult r = solo_draw(&G.opts, &app.speed_idx, &in);
+                if (!overlay) {
+                    if (r == SOLO_START) start_game();
+                    if (r == SOLO_QUIT || G.in.pressed[BTN_B]) G.screen = SCREEN_HOME;
+                }
+            }
+            if (G.home_audio && (audio_panel_draw() || G.in.pressed[BTN_B])) G.home_audio = false, settings_save();
+            draw_help();
+            if (app.help_visible && G.in.pressed[BTN_B]) app.help_visible = false;
             draw_cursor();
             ui_end();
             sound_music(false);
             sound_ambience(NULL, 0);
-            if (r == SOLO_START) start_game();
-            if (r == SOLO_QUIT) G.quit = true;
         } else {
             game_frame(&G.in);
         }
@@ -913,6 +942,7 @@ int main(int argc, char **argv) {
     input_shutdown();
     map_shutdown();
     solo_shutdown();
+    home_shutdown();
     gfx_shutdown();
     SDL_DestroyRenderer(G.ren);
     SDL_DestroyWindow(win);
