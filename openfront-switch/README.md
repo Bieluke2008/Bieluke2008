@@ -20,6 +20,20 @@ al mando.
 
 - Partidas para un jugador contra **naciones** (IA) y **tribus** (bots), con
   la misma lógica de juego que openfront.io.
+- **Pantalla de inicio** como la página principal de la web (fondo del mapa,
+  nombre editable, Solo, Audio, Controles) y la ventana **Solo** de la web:
+  mapa, **dificultad** con sus calaveras, **modo** (todos contra todos o
+  equipos, con 2-7 equipos, cuartetos, tríos, dúos o humanos contra
+  naciones), tribus, naciones, todas las **opciones** (aparición aleatoria,
+  bombas en agua, reloj del juicio final con su ritmo, duración máxima, oro
+  inicial, multiplicador de oro, duración de alianzas (0 = sin alianzas),
+  tiempo extra, oro y tropas infinitos, construcción instantánea) y
+  **desactivar unidades**. En la partida, Menú muestra los modificadores activos como en
+  la web.
+- **Sonido** de OpenFront: efectos (construir, bombas, alertas, conquistas,
+  alianzas, victoria/derrota…), sonido ambiente de las ciudades al acercarte
+  y la pestaña **Audio** de la web con sus seis volúmenes. La música es
+  opcional (ver *Instalar*).
 - **La interfaz del cliente web**, redibujada en nativo con el diseño
   medido del navegador (1280×720) y los recursos de OpenFront (iconos SVG,
   banderas, atlas de unidades, estructuras, estados y emojis, fuentes Inter y
@@ -56,7 +70,7 @@ al mando.
 - **Multijugador online.** Necesitaría el protocolo de los servidores de
   OpenFront (con su autenticación y antibots) y que la consola simule a la
   velocidad exacta del servidor.
-- Sonido, cosméticos/skins, vías de tren dibujadas, equipos, repeticiones,
+- Cosméticos/skins, vías de tren dibujadas, repeticiones,
   partidas guardadas y la pantalla completa de ajustes (el botón «Ajustes» del
   menú muestra los controles).
 
@@ -117,6 +131,14 @@ Menu.
 3. Abre el Homebrew Menu **manteniendo R al abrir un juego** (*title
    override*). Desde el álbum (modo applet) la app tiene mucha menos memoria
    y los mapas grandes pueden fallar.
+
+**Música (opcional).** La música de OpenFront no es libre (está en su
+carpeta `proprietary/`, «todos los derechos reservados»), así que no va en el
+`.nro`. Si la tienes, copia sus mp3 de `proprietary/sounds/music/` a
+`/switch/openfront/music/` en la microSD con estos nombres: `menu-theme.mp3`
+(menús), `gameplay.mp3`, `gameplay-2.mp3` y `gameplay-3.mp3` (partida). Los
+ajustes (nombre y volúmenes) se guardan en
+`/switch/openfront/openfront-settings.ini`.
 
 ## Compilar
 
@@ -211,9 +233,11 @@ actualizarla, hay que revisar el adaptador: usa piezas internas del motor
 - Código: **AGPL-3.0** (ver `LICENSE`), como OpenFront, del que deriva.
 - OpenFront © OpenFront Inc. y colaboradores —
   <https://github.com/openfrontio/OpenFrontIO>. Mapas, miniaturas,
-  traducciones, iconos, banderas, atlas y la fuente Overpass provienen de su
+  traducciones, iconos, banderas, atlas, efectos de sonido, sonido ambiente,
+  la imagen de fondo de la portada y la fuente Overpass provienen de su
   carpeta `resources/` (CC BY-SA 4.0, atribución «OpenFront»). No se usa nada de su carpeta `proprietary/`.
-- QuickJS-ng (MIT), cJSON (MIT), SDL2, SDL2_ttf y SDL2_image (zlib), libnx
+- QuickJS-ng (MIT), cJSON (MIT), SDL2, SDL2_ttf, SDL2_image y SDL2_mixer
+  (zlib), mpg123 (LGPL-2.1, decodifica los mp3), libnx
   (ISC), Inter (OFL), DejaVu Sans Mono (licencia de Bitstream Vera), y unos
   pocos emojis de Noto Color Emoji (OFL) en `assets/ui-emoji.png`.
 

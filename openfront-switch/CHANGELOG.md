@@ -5,6 +5,31 @@ Cada versión es una etiqueta de git (`vX.Y.Z`) y, a partir de la 0.2.0, una
 workflow **OpenFront Switch release** al subir la etiqueta). El número de
 versión está en `VERSION` y se ve en la pantalla de inicio de la app.
 
+## 0.6.0
+
+- Pantalla de inicio como la página principal de openfront.io: fondo del
+  mapa, título, tu nombre (se guarda; Y o tocar para cambiarlo), Solo,
+  Audio, Controles y Salir. Al salir de una partida vuelves aquí.
+- Ventana Solo como la de la web, por secciones y con sus iconos y colores:
+  mapa, dificultad (Fácil… Imposible, con calaveras; se apaga si no hay
+  naciones), modo (todos contra todos / equipos: 2-7 equipos, cuartetos,
+  tríos, dúos, humanos contra naciones), tribus (0-400), naciones (0-400 o
+  las del mapa), interruptores (aparición aleatoria, bombas en agua, oro y
+  tropas infinitos, construcción instantánea, mapa compacto),
+  reloj del juicio final con su ritmo y las tarjetas numéricas de la web
+  (duración máxima, multiplicador de oro, oro inicial, duración de las
+  alianzas, con 0 = sin alianzas, tiempo extra) con −/+ o teclado. Rejilla «Desactivar unidades».
+- En la partida, Menú lista los modificadores activos y las unidades
+  desactivadas, como el menú de ajustes de la web.
+- Sonido: los efectos originales de OpenFront (construir, bombas y su
+  alerta, MIRV, conquistas, alianzas, mensajes, tren, inicio, victoria y
+  derrota), sonido ambiente de las ciudades/fábricas al acercar la cámara y
+  clic en los menús. Pestaña Audio como la de la web (general, música,
+  efectos, alertas, ambiente, interfaz, con «Probar» y «Restablecer»).
+- Música opcional: la de OpenFront no es libre y no va incluida; si copias
+  sus mp3 a /switch/openfront/music/ suena en el menú y en la partida.
+- Los ajustes se guardan en /switch/openfront/openfront-settings.ini.
+
 ## 0.5.0
 
 Menos bajones al atacar. Medido en PC en una partida en Europa con el
@@ -25,6 +50,7 @@ jugador atacando (en la Switch los tiempos son unas 3-4 veces mayores):
   se repintan esos dos jugadores. Los cambios se suben en bloques de 64×64
   en vez de un rectángulo que acababa cubriendo casi todo el mapa.
 
+## 0.4.0
 
 - Barra de progreso bajo cada edificio, como en PC (14×3 casillas, de rojo a
   verde): construcción, cuenta atrás al borrarlo y recarga de silos y SAM.

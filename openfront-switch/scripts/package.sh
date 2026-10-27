@@ -20,6 +20,11 @@ Instalar (Switch con Atmosphere y Homebrew Menu):
    album: ahi la app tiene mucha menos memoria).
 3. Elige OpenFront.
 
+Musica (opcional): la musica de OpenFront no es libre y no va incluida.
+Si la tienes, copia sus mp3 a /switch/openfront/music/ con estos nombres:
+menu-theme.mp3, gameplay.mp3, gameplay-2.mp3, gameplay-3.mp3.
+Los efectos de sonido y el ambiente si van incluidos.
+
 Controles: en la partida, Menu (+) > Ajustes muestra la lista completa.
 Tactil: tocar = clic, mantener = menu radial, arrastrar = mover, pellizcar = zoom.
 
