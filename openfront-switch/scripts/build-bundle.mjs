@@ -80,3 +80,26 @@ writeFileSync(
   "/* OpenFront engine (https://github.com/openfrontio/OpenFrontIO), AGPL-3.0 */\n" +
     body,
 );
+
+// The game server a Switch runs when it hosts a game for others (js/server.ts),
+// for its own QuickJS runtime: server.js next to engine.js.
+const serverFile = join(dirname(outFile), "server.js");
+await esbuild.build({
+  absWorkingDir: ofDir,
+  entryPoints: [join(portDir, "server.ts")],
+  bundle: true,
+  format: "iife",
+  platform: "neutral",
+  mainFields: ["module", "main"],
+  target: "es2022",
+  minify: !process.env.OPENFRONT_NO_MINIFY,
+  legalComments: "none",
+  tsconfig: join(ofDir, "tsconfig.json"),
+  banner: { js: prelude },
+  outfile: serverFile,
+  logLevel: "info",
+});
+writeFileSync(
+  serverFile,
+  "/* OpenFront (https://github.com/openfrontio/OpenFrontIO), AGPL-3.0 */\n" + readFileSync(serverFile, "utf8"),
+);

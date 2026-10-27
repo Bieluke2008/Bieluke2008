@@ -317,7 +317,8 @@ static float lobby_header(const SoloLobby *lobby, float x0, float y, float w) {
     snprintf(l, sizeof l, "%s", T("port.mp_code"));
     gfx_upper(l);
     gfx_text(FONT_700, 13, l, cr.x + 16, cr.y + 12, 18, hex(LABEL), ALIGN_LEFT);
-    gfx_text(FONT_400, 12, T("port.mp_code_hint"), cr.x + 16, cr.y + 34, 18, hex(0x8f8696), ALIGN_LEFT);
+    gfx_text(FONT_400, 12, lobby->hint ? lobby->hint : T("port.mp_code_hint"), cr.x + 16, cr.y + 34, 18, hex(0x8f8696),
+             ALIGN_LEFT);
     gfx_text(FONT_800, 28, lobby->code, cr.x + cr.w - 16, cr.y + 14, 34, hex(ORANGE), ALIGN_RIGHT);
     y += 64 + 24;
     char title[96];

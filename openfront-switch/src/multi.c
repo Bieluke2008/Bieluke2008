@@ -12,6 +12,7 @@
 #include "gfx.h"
 #include "home.h"
 #include "json.h"
+#include "lanhost.h"
 #include "net.h"
 #include "settings.h"
 #include "solo.h"
@@ -51,7 +52,11 @@ static struct {
     double changed_at;
     char token[40];
     bool is_host;       // the lobby is ours
+    bool lan_host;      // ...and this console is its server (lanhost.c)
+    char lan_hint[160]; // how other consoles join it
     int auto_start;     // tests: start once this many players are in
+    int auto_lan;       // tests: 1 host on this console, 2 join the first lobby heard
+    const char *romfs;
 } M;
 
 // --- Identity ---------------------------------------------------------------------------
@@ -174,8 +179,57 @@ static void connect_lobby(const char *worker_path, const char *name) {
     M.st = ST_LOBBY;
 }
 
+/** Hosts a lobby on this console: its own game server, joined like any other. */
+static void host_here(const char *name) {
+    M.error[0] = 0;
+    if (!net_init()) {
+        set_error(T("port.mp_no_network"));
+        return;
+    }
+    int port = lan_host_start(M.romfs, token(), M.code, sizeof M.code);
+    if (!port) {
+        set_error(T("port.mp_host_failed"));
+        return;
+    }
+    M.lan_host = true;
+    snprintf(M.host, sizeof M.host, "127.0.0.1");
+    M.port = port;
+    char ip[48];
+    net_local_ip(ip, sizeof ip);
+    char addr[64];
+    snprintf(addr, sizeof addr, "%s:%d", ip[0] ? ip : "?", port);
+    const char *f = T("port.mp_switch_hint");
+    const char *at = strstr(f, "{ip}");
+    if (at) snprintf(M.lan_hint, sizeof M.lan_hint, "%.*s%s%s", (int)(at - f), f, addr, at + 4);
+    else snprintf(M.lan_hint, sizeof M.lan_hint, "%s %s", f, addr);
+    printf("lobby %s on lan %s\n", M.code, addr);
+    fflush(stdout);
+    connect_lobby("w0", name);
+}
+
+/** Joins a lobby another console announced. */
+static void join_lan(const LanGame *g, const char *name) {
+    M.error[0] = 0;
+    if (strcmp(g->version, OPENFRONT_VERSION)) {
+        char msg[256];
+        snprintf(msg, sizeof msg, "%s (%s / %s)", T("port.mp_version_diff"), g->version, OPENFRONT_VERSION);
+        set_error(msg);
+        return;
+    }
+    snprintf(M.host, sizeof M.host, "%s", g->ip);
+    M.port = g->port;
+    snprintf(M.code, sizeof M.code, "%s", g->id);
+    connect_lobby("w0", name);
+}
+
+static void stop_hosting(void) {
+    if (M.lan_host) lan_host_stop();
+    M.lan_host = false;
+}
+
 static void leave_lobby(void) {
     engine_call("mpLeave", "{}", false);
+    stop_hosting();
     cJSON_Delete(M.lobby);
     M.lobby = NULL;
     M.st = ST_MENU;
@@ -232,6 +286,10 @@ static void poll_http(const StartOptions *o) {
     } else if (M.st == ST_FINDING) {
         if (status == 0) {
             set_error(T("port.mp_no_server"));
+        } else if (jbool(j, "exists") && jstr(j, "switch", NULL) && strcmp(jstr(j, "switch", ""), OPENFRONT_VERSION)) {
+            char msg[256];
+            snprintf(msg, sizeof msg, "%s (%s / %s)", T("port.mp_version_diff"), jstr(j, "switch", ""), OPENFRONT_VERSION);
+            set_error(msg);
         } else if (jbool(j, "exists")) {
             char wp[8];
             snprintf(wp, sizeof wp, "w%d", M.probe);
@@ -305,40 +363,84 @@ static float paragraph(const char *text, float x, float y, float w, float size, 
     return h;
 }
 
-static MultiResult draw_menu(const Input *in) {
+/** A lobby another console announced: host, map, players; joins on A / tap. */
+static bool lan_row(int i, const LanGame *g, Rect r) {
+    uint32_t id = ui_id("multi-lan", i);
+    bool hover = ui_hover(id, r);
+    bool other_version = strcmp(g->version, OPENFRONT_VERSION) != 0;
+    gfx_box(r, 10, hex(hover ? 0x2a1834 : ITEM_BG), 1, hover ? alpha(hex(ORANGE), 0.6f) : hex(ITEM_BORDER));
+    const MapList *ml = engine_maps();
+    const char *map = g->map;
+    for (int m = 0; m < ml->nmaps; m++)
+        if (!strcmp(ml->map_folders[m], g->map)) map = ml->map_names[m];
+    char line[256];
+    snprintf(line, sizeof line, "%.63s · %.63s · %s: %d", g->host[0] ? g->host : g->ip, map, T("host_modal.players"), g->players);
+    gfx_text(FONT_600, 16, line, r.x + 16, r.y + 8, 22, hex(TW_WHITE), ALIGN_LEFT);
+    char sub[256];
+    if (other_version) snprintf(sub, sizeof sub, "%s (%s)", T("port.mp_version_diff"), g->version);
+    else if (g->started) snprintf(sub, sizeof sub, "%s", T("port.mp_in_progress"));
+    else snprintf(sub, sizeof sub, "%.47s · %.15s", g->ip, g->id);
+    gfx_text(FONT_400, 12, sub, r.x + 16, r.y + 30, 16, other_version ? hex(0xf87171) : hex(MUTED), ALIGN_LEFT);
+    char join[48];
+    snprintf(join, sizeof join, "%s", T("private_lobby.play"));
+    gfx_upper(join);
+    gfx_text(FONT_700, 15, join, r.x + r.w - 16, r.y + 15, 20, hex(ORANGE), ALIGN_RIGHT);
+    return ui_button(id, r);
+}
+
+static MultiResult draw_menu(const StartOptions *o, const Input *in) {
     MultiResult result = MULTI_NONE;
     home_backdrop();
     const float W = 600, X = PAGE_W / 2.0f - W / 2;
-    gfx_box((Rect){X - 24, 112, W + 48, 508}, 14, alpha(hex(CARD_BG), 0.96f), 1, hex(CARD_BORDER));
-    card_title(T("port.multiplayer"), 132);
+    gfx_box((Rect){X - 24, 100, W + 48, 528}, 14, alpha(hex(CARD_BG), 0.96f), 1, hex(CARD_BORDER));
+    card_title(T("port.multiplayer"), 116);
+    bool busy = M.st != ST_MENU;
 
-    label(T("port.mp_server"), X, 196);
-    Rect sr = {X, 220, W, 52};
+    // Host here: this console is the server.
+    if ((home_button("multi-host", (Rect){X, 164, W, 60}, T("port.mp_host_here"), true, 20) || in->pressed[BTN_PLUS]) && !busy)
+        host_here(o->name);
+
+    // Lobbies other consoles announce.
+    label(T("port.mp_lan_games"), X, 240);
+    LanGame games[3];
+    int ng = lan_discover_list(games, 3);
+    float y = 264;
+    for (int i = 0; i < ng; i++) {
+        if (lan_row(i, &games[i], (Rect){X, y, W, 52}) && !busy) join_lan(&games[i], o->name);
+        y += 58;
+    }
+    if (ng == 0) {
+        gfx_box((Rect){X, y, W, 52}, 10, alpha(hex(ITEM_BG), 0.5f), 1, hex(ITEM_BORDER));
+        gfx_text(FONT_400, 14, T("port.mp_searching"), PAGE_W / 2.0f, y + 16, 20, hex(MUTED), ALIGN_CENTER);
+        y += 58;
+    }
+    // Tests (multi_auto with "lan"): host, or join the first lobby heard.
+    if (M.auto_lan == 1 && !busy) M.auto_lan = 0, host_here(o->name);
+    if (M.auto_lan == 2 && ng > 0 && !busy) M.auto_lan = 0, join_lan(&games[0], o->name);
+    paragraph(T("port.mp_same_wifi"), X, y + 2, W, 13, hex(MUTED));
+
+    // A PC running OpenFront's server (with browsers).
+    label(T("port.mp_pc_server"), X, 452);
+    const float bw = 112;
+    Rect sr = {X, 476, W - 2 * (bw + 12), 48};
     uint32_t sid = ui_id("multi-server", 0);
     bool sh = ui_hover(sid, sr);
     gfx_box(sr, 10, hex(sh ? 0x2a1834 : ITEM_BG), 1, sh ? alpha(hex(ORANGE), 0.6f) : hex(ITEM_BORDER));
-    gfx_text(FONT_600, 20, M.server[0] ? M.server : "192.168.1.?:9000", sr.x + 18, sr.y + 13, 26,
+    gfx_text(FONT_600, 18, M.server[0] ? M.server : "192.168.1.?:9000", sr.x + 16, sr.y + 12, 24,
              M.server[0] ? hex(TW_WHITE) : hex(MUTED), ALIGN_LEFT);
     if (ui_button(sid, sr) || in->pressed[BTN_Y]) ask_text(M.server, T("port.mp_server"), true, M.server, sizeof M.server);
-
-    bool busy = M.st != ST_MENU;
-    float bw = (W - 16) / 2;
-    if (home_button("multi-create", (Rect){X, 292, bw, 72}, T("main.create"), true, 20) && !busy) create_lobby();
-    if (home_button("multi-join", (Rect){X + bw + 16, 292, bw, 72}, T("main.join"), false, 20) && !busy) {
+    if (home_button("multi-create", (Rect){sr.x + sr.w + 12, 476, bw, 48}, T("port.mp_create_short"), false, 15) && !busy)
+        create_lobby();
+    if (home_button("multi-join", (Rect){sr.x + sr.w + 24 + bw, 476, bw, 48}, T("port.mp_join_short"), false, 15) && !busy) {
         char code[32] = "";
         if (ask_text("", T("private_lobby.enter_id"), false, code, sizeof code)) join_lobby(code);
     }
 
-    float y = 388;
-    if (busy) {
-        gfx_text(FONT_600, 16, T("port.mp_connecting"), PAGE_W / 2.0f, y, 22, hex(ORANGE), ALIGN_CENTER);
-        y += 32;
-    } else if (M.error[0]) {
-        y += paragraph(M.error, X, y, W, 15, hex(0xf87171)) + 12;
-    }
-    paragraph(T("port.mp_help"), X, y, W, 14, hex(MUTED));
-    if (home_button("multi-back", (Rect){X, 548, W, 52}, T("common.back"), false, 16)) result = MULTI_BACK;
+    if (busy) gfx_text(FONT_600, 15, T("port.mp_connecting"), PAGE_W / 2.0f, 534, 20, hex(ORANGE), ALIGN_CENTER);
+    else if (M.error[0]) paragraph(M.error, X, 532, W, 13, hex(0xf87171));
+    if (home_button("multi-back", (Rect){X, 568, W, 44}, T("common.back"), false, 15)) result = MULTI_BACK;
     if (in->pressed[BTN_B] && !busy) result = MULTI_BACK;
+    if (result == MULTI_BACK) lan_discover_stop();
     return result;
 }
 
@@ -398,17 +500,19 @@ static void draw_waiting(const Input *in) {
 
 MultiResult multi_draw(StartOptions *o, const Input *in) {
     poll_http(o);
-    if (M.st != ST_LOBBY) return draw_menu(in);
+    if (M.st != ST_LOBBY) return draw_menu(o, in);
 
     poll_lobby();
     const char *phase = jstr(M.lobby, "phase", "connecting");
     if (!strcmp(phase, "closed")) {
         set_error(jstr(M.lobby, "error", T("port.mp_closed")));
         engine_call("mpLeave", "{}", false);
-        return draw_menu(in);
+        stop_hosting();
+        return draw_menu(o, in);
     }
     if (!strcmp(phase, "loading") || !strcmp(phase, "game")) {
         M.in_game = true;
+        lan_discover_stop();
         return MULTI_GAME;
     }
     M.is_host = jbool(M.lobby, "isHost");
@@ -426,7 +530,7 @@ MultiResult multi_draw(StartOptions *o, const Input *in) {
             if (now - M.changed_at > 250) send_config(o), M.changed_at = 0;
         }
     }
-    SoloLobby lobby = {.code = M.code, .starting = jbool(M.lobby, "starting")};
+    SoloLobby lobby = {.code = M.code, .hint = M.lan_host ? M.lan_hint : NULL, .starting = jbool(M.lobby, "starting")};
     const cJSON *players = jget(M.lobby, "players");
     for (int i = 0; i < jlen(players) && lobby.nplayers < 64; i++) {
         const cJSON *pl = jat(players, i);
@@ -449,8 +553,11 @@ MultiResult multi_draw(StartOptions *o, const Input *in) {
     return MULTI_NONE;
 }
 
+void multi_init(const char *romfs) { M.romfs = romfs; }
+
 void multi_open(void) {
     if (!M.server[0]) snprintf(M.server, sizeof M.server, "%s", settings_str("server", ""));
+    if (net_init()) lan_discover_start();
     M.st = ST_MENU;
     M.error[0] = 0;
 }
@@ -461,6 +568,8 @@ bool multi_is_host(void) { return M.is_host; }
 
 void multi_game_over(void) {
     M.in_game = false;
+    stop_hosting();
+    if (net_init()) lan_discover_start();
     cJSON_Delete(M.lobby);
     M.lobby = NULL;
     M.st = ST_MENU;
@@ -469,6 +578,10 @@ void multi_game_over(void) {
 void multi_auto(const char *server, const char *code, int start_players) {
     multi_open();
     M.auto_start = start_players;
+    if (!strcmp(server, "lan")) {
+        M.auto_lan = code ? 2 : 1;
+        return;
+    }
     snprintf(M.server, sizeof M.server, "%s", server);
     if (code) join_lobby(code);
     else create_lobby();

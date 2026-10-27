@@ -22,6 +22,7 @@
 #include "input.h"
 #include "json.h"
 #include "map.h"
+#include "lanhost.h"
 #include "menus.h"
 #include "multi.h"
 #include "net.h"
@@ -82,7 +83,9 @@ static const char *const STRINGS[] = {
     "port.mp_code", "port.mp_code_hint", "port.mp_lobby", "port.mp_leave", "main.create", "main.join",
     "private_lobby.enter_id", "private_lobby.error", "private_lobby.not_found", "private_lobby.title",
     "private_lobby.joined_waiting", "host_modal.players", "host_modal.host_badge", "host_modal.waiting",
-    "game_starting_modal.title",
+    "game_starting_modal.title", "port.mp_host_here", "port.mp_lan_games", "port.mp_searching", "port.mp_same_wifi",
+    "port.mp_pc_server", "port.mp_create_short", "port.mp_join_short", "port.mp_in_progress", "port.mp_version_diff",
+    "port.mp_switch_hint", "port.mp_host_failed", "private_lobby.play",
     NULL,
 };
 
@@ -761,9 +764,10 @@ static void autoplay(int frame) {
     // Benchmarks leave the human out, so the seeded game is fully repeatable.
     if (app.spawn_phase && !getenv("OPENFRONT_BENCH") && !jbool(me, "spawned") && G.snap.tick > 2 && G.snap.tick != test.last_tick) {
         test.last_tick = G.snap.tick;
-        // Spawn on land near the map centre.
+        // Spawn on land near the map centre (OPENFRONT_TEST_SPAWN_DX moves a second test player away).
+        int dx = getenv("OPENFRONT_TEST_SPAWN_DX") ? atoi(getenv("OPENFRONT_TEST_SPAWN_DX")) : 0;
         for (int r = 0; r < G.snap.width; r += 2) {
-            int x = G.snap.width / 2 + r, y = G.snap.height / 2;
+            int x = G.snap.width / 2 + dx + r, y = G.snap.height / 2;
             if (x < G.snap.width && (G.snap.terrain[y * G.snap.width + x] & 0x80) && !(G.snap.state[y * G.snap.width + x] & 0xfff)) {
                 char args[64];
                 snprintf(args, sizeof args, "{\"x\":%d,\"y\":%d}", x, y);
@@ -918,6 +922,7 @@ int main(int argc, char **argv) {
     }
     solo_init(G.romfs);
     home_init(G.romfs);
+    multi_init(G.romfs);
     const char *saved_name = settings_str("name", NULL);
     if (saved_name && saved_name[0]) snprintf(G.opts.name, sizeof G.opts.name, "%s", saved_name);
     G.screen = SCREEN_HOME;
@@ -994,6 +999,8 @@ int main(int argc, char **argv) {
     }
 
     engine_shutdown();
+    lan_host_stop();
+    lan_discover_stop();
     ws_close();
     net_shutdown();
     sound_shutdown();

@@ -8,6 +8,8 @@
 
 typedef enum { MULTI_NONE, MULTI_BACK, MULTI_GAME } MultiResult;
 
+/** Where server.js is (for hosting on this console). */
+void multi_init(const char *romfs);
 /** Shows the multiplayer menu (from the home page). */
 void multi_open(void);
 /** Draws the current multiplayer screen; between ui_begin() and ui_end(). */
@@ -22,6 +24,7 @@ bool multi_is_host(void);
 
 /**
  * Tests: create a lobby on `server` (and start it once `start_players` have
- * joined), or join `code` there, without the menu.
+ * joined), or join `code` there, without the menu. `server` "lan" hosts on
+ * this console, or with a `code` joins the first lobby announced nearby.
  */
 void multi_auto(const char *server, const char *code, int start_players);

@@ -5,6 +5,22 @@ Cada versión es una etiqueta de git (`vX.Y.Z`) y, a partir de la 0.2.0, una
 workflow **OpenFront Switch release** al subir la etiqueta). El número de
 versión está en `VERSION` y se ve en la pantalla de inicio de la app.
 
+## 0.8.0
+
+- Multijugador entre Switch sin PC: «Crear partida en esta Switch» convierte
+  la consola en el servidor de la partida; las demás Switch de la misma red
+  Wi-Fi (o del punto de acceso de un móvil) la ven en «Partidas en tu red» y
+  entran con un toque. También se puede entrar con la IP que muestra la
+  anfitriona y el código.
+- La anfitriona juega a la vez que sirve la partida (el servidor va en su
+  propio hilo); avisa si otra Switch tiene una versión distinta del port.
+- Comprobado con dos copias del port: la segunda encontró la partida por la
+  red, las dos jugaron y simularon exactamente igual (186 hashes iguales,
+  unos 3 minutos de partida).
+- Arreglado: al desactivar en la sala una opción (multiplicador de oro, oro
+  inicial, duración máxima, alianzas, bombas en agua, reloj del juicio final,
+  tiempo extra) el servidor conservaba el valor anterior.
+
 ## 0.7.0
 
 - Multijugador en red local con jugadores en el navegador y otras Switch,

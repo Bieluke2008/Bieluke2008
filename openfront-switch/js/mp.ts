@@ -242,11 +242,25 @@ export function mpUpdate(gu: GameUpdateViewData): void {
   }
 }
 
+/**
+ * The Solo modal's options as an update_game_config patch. The server keeps
+ * what a patch leaves out (ConfigPatch.ts), so options that are off are sent
+ * as null (its nullable keys) or as disabled, never omitted.
+ */
+export function configPatch(opts: StartOptions): Record<string, unknown> {
+  const { gameType: _ignored, ...config } = configFromOptions(opts, GameType.Private) as Record<string, unknown>;
+  for (const key of ["maxTimerValue", "goldMultiplier", "startingGold", "customAllianceDuration", "waterNukes"]) {
+    if (config[key] === undefined) config[key] = null;
+  }
+  if (config.doomsdayClock === undefined) config.doomsdayClock = { enabled: false };
+  if (config.overtime === undefined) config.overtime = { enabled: false };
+  return config;
+}
+
 /** Host only: the lobby's settings from the Solo modal's options. */
 export function mpConfig(opts: StartOptions): void {
   if (MP.phase !== "lobby") return;
-  const { gameType: _ignored, ...config } = configFromOptions(opts, GameType.Private);
-  sendIntent({ type: "update_game_config", config } as Intent);
+  sendIntent({ type: "update_game_config", config: configPatch(opts) } as Intent);
 }
 
 /** Host only: HostLobbyModal's start button. */

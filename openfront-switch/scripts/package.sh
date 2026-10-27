@@ -22,7 +22,14 @@ Instalar (Switch con Atmosphere y Homebrew Menu):
    album: ahi la app tiene mucha menos memoria).
 3. Elige OpenFront.
 
-Multijugador en red local (con la Switch y con navegadores):
+Multijugador entre Switch (sin PC):
+Todas las Switch en la misma red Wi-Fi (vale la de un movil compartiendo
+datos) y con la misma version del port. Una entra en Multijugador y pulsa
+"Crear partida en esta Switch"; las demas la ven en "Partidas en tu red" y
+la tocan para entrar. Si no aparece, usa "Unirse" con la IP que muestra la
+anfitriona (IP:47801) y el codigo de la sala.
+
+Multijugador con navegadores (servidor en un PC):
 1. En un PC de tu red instala Git (https://git-scm.com) y Node.js 24
    (https://nodejs.org).
 2. Copia la carpeta "servidor-pc" de este zip al PC y abre

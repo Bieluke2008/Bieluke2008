@@ -30,8 +30,14 @@ al mando.
   tiempo extra, oro y tropas infinitos, construcción instantánea) y
   **desactivar unidades**. En la partida, Menú muestra los modificadores activos como en
   la web.
-- **Multijugador en red local** contra jugadores en el navegador y otras
-  Switch: el servidor es el de OpenFront (código abierto) en un PC de tu red,
+- **Multijugador entre Switch sin PC**: una Switch crea la partida y hace
+  de servidor; las demás de la misma red Wi-Fi (vale la de un móvil
+  compartiendo datos) la ven en la lista de «Partidas en tu red» y entran. La
+  anfitriona lleva un servidor de OpenFront reducido (`js/server.ts`, con el
+  mismo protocolo y el código de OpenFront para los ajustes de la sala y la
+  detección de desincronizaciones) en su propio hilo (`src/lanhost.c`), y
+  anuncia la sala por difusión UDP (puerto 47802; el juego va por TCP 47801).
+- **Multijugador en red local con navegadores**: el servidor es el de OpenFront (código abierto) en un PC de tu red,
   arrancado con `server/iniciar-servidor-windows.bat` o
   `server/iniciar-servidor.sh`. Desde la Switch se crea una sala (con todas
   las opciones de Solo) o se entra en una con su código; los demás entran
@@ -141,7 +147,15 @@ Menu.
    override*). Desde el álbum (modo applet) la app tiene mucha menos memoria
    y los mapas grandes pueden fallar.
 
-**Multijugador en red local.** En un PC de la misma red instala Git y
+**Multijugador entre Switch.** No hace falta nada más: todas en la misma red
+Wi-Fi, una elige Multijugador → «Crear partida en esta Switch» y las demás la
+tocan en «Partidas en tu red» (o «Unirse» con la IP que muestra la
+anfitriona, `IP:47801`, y el código). Todas deben tener la misma versión del
+port. El modo inalámbrico local de la consola (sin router) no está: Nintendo
+lo ata al identificador del juego, y en homebrew depende del juego desde el
+que se abre el Homebrew Menu.
+
+**Multijugador con navegadores (servidor en un PC).** En un PC de la misma red instala Git y
 Node.js 24 y abre `servidor-pc/iniciar-servidor-windows.bat` (o
 `iniciar-servidor.sh` en Linux/macOS) del zip: descarga OpenFront en la
 versión exacta que usa el port (si no coincidiera, las partidas se

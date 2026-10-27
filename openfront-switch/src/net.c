@@ -1,4 +1,5 @@
 #include "net.h"
+#include "netutil.h"
 
 #include <SDL.h>
 #include <ctype.h>
@@ -88,7 +89,7 @@ static int tcp_connect(const char *host, int port) {
     return fd;
 }
 
-static bool send_all(int fd, const void *buf, size_t len) {
+bool net_send_all(int fd, const void *buf, size_t len) {
     const char *p = buf;
     while (len > 0) {
         ssize_t n = send(fd, p, len, 0);
@@ -110,12 +111,7 @@ static ssize_t recv_timeout(int fd, void *buf, size_t len, int timeout_ms) {
 
 // --- Growable byte buffer -------------------------------------------------------
 
-typedef struct {
-    unsigned char *p;
-    size_t len, cap;
-} Buf;
-
-static void buf_add(Buf *b, const void *data, size_t n) {
+void net_buf_add(NetBuf *b, const void *data, size_t n) {
     if (b->len + n + 1 > b->cap) {
         b->cap = (b->len + n + 1) * 2;
         b->p = realloc(b->p, b->cap);
@@ -125,7 +121,7 @@ static void buf_add(Buf *b, const void *data, size_t n) {
     b->p[b->len] = 0;
 }
 
-static void buf_drop(Buf *b, size_t n) {
+void net_buf_drop(NetBuf *b, size_t n) {
     memmove(b->p, b->p + n, b->len - n);
     b->len -= n;
 }
@@ -182,11 +178,11 @@ static int http_main(void *arg) {
             n += snprintf(head + n, sizeof head - (size_t)n,
                           "Content-Type: application/json\r\nContent-Length: %zu\r\n", blen);
         n += snprintf(head + n, sizeof head - (size_t)n, "\r\n");
-        Buf resp = {0};
-        if (send_all(fd, head, (size_t)n) && (!blen || send_all(fd, r->req_body, blen))) {
+        NetBuf resp = {0};
+        if (net_send_all(fd, head, (size_t)n) && (!blen || net_send_all(fd, r->req_body, blen))) {
             char chunk[4096];
             ssize_t got;
-            while ((got = recv_timeout(fd, chunk, sizeof chunk, HTTP_TIMEOUT_MS)) > 0) buf_add(&resp, chunk, (size_t)got);
+            while ((got = recv_timeout(fd, chunk, sizeof chunk, HTTP_TIMEOUT_MS)) > 0) net_buf_add(&resp, chunk, (size_t)got);
         }
         close(fd);
         if (resp.len > 12 && !strncmp((char *)resp.p, "HTTP/1.", 7)) {
@@ -335,14 +331,14 @@ static bool send_frame(int fd, int opcode, const void *data, size_t len) {
     h += 4;
     unsigned char *masked = malloc(len + 1);
     for (size_t i = 0; i < len; i++) masked[i] = ((const unsigned char *)data)[i] ^ mask[i & 3];
-    bool ok = send_all(fd, head, h) && (len == 0 || send_all(fd, masked, len));
+    bool ok = net_send_all(fd, head, h) && (len == 0 || net_send_all(fd, masked, len));
     free(masked);
     return ok;
 }
 
 static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-static void base64(const unsigned char *in, size_t n, char *out) {
+void net_base64(const unsigned char *in, size_t n, char *out) {
     size_t o = 0;
     for (size_t i = 0; i < n; i += 3) {
         uint32_t v = (uint32_t)in[i] << 16 | (i + 1 < n ? in[i + 1] << 8 : 0) | (i + 2 < n ? in[i + 2] : 0);
@@ -355,29 +351,29 @@ static void base64(const unsigned char *in, size_t n, char *out) {
 }
 
 /** Sends the upgrade request and reads the 101 reply; leftover bytes go to *rest. */
-static bool handshake(int fd, const WsArgs *a, Buf *rest) {
+static bool handshake(int fd, const WsArgs *a, NetBuf *rest) {
     unsigned char key[16];
     for (int i = 0; i < 16; i++) key[i] = (unsigned char)rand();
     char key64[32];
-    base64(key, 16, key64);
+    net_base64(key, 16, key64);
     char req[1024];
     int n = snprintf(req, sizeof req,
                      "GET %s HTTP/1.1\r\nHost: %s:%d\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
                      "Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nOrigin: http://%s:%d\r\n"
                      "User-Agent: OpenFront-Switch\r\n\r\n",
                      a->path, a->host, a->port, key64, a->host, a->port);
-    if (!send_all(fd, req, (size_t)n)) return false;
-    Buf b = {0};
+    if (!net_send_all(fd, req, (size_t)n)) return false;
+    NetBuf b = {0};
     char chunk[2048];
     char *end = NULL;
     while (!end) {
         ssize_t got = recv_timeout(fd, chunk, sizeof chunk, CONNECT_TIMEOUT_MS);
         if (got <= 0) break;
-        buf_add(&b, chunk, (size_t)got);
+        net_buf_add(&b, chunk, (size_t)got);
         end = strstr((char *)b.p, "\r\n\r\n");
     }
     bool ok = end && b.len > 12 && !strncmp((char *)b.p + 9, "101", 3);
-    if (ok) buf_add(rest, end + 4, b.len - (size_t)(end + 4 - (char *)b.p));
+    if (ok) net_buf_add(rest, end + 4, b.len - (size_t)(end + 4 - (char *)b.p));
     free(b.p);
     return ok;
 }
@@ -386,7 +382,7 @@ static int ws_main(void *arg) {
     WsArgs a = *(WsArgs *)arg;
     free(arg);
     int fd = tcp_connect(a.host, a.port);
-    Buf in = {0};
+    NetBuf in = {0};
     if (fd < 0 || !handshake(fd, &a, &in)) {
         if (fd >= 0) close(fd);
         free(in.p);
@@ -395,7 +391,7 @@ static int ws_main(void *arg) {
         return 0;
     }
     push_event(a.gen, WS_EV_OPEN, NULL, 0, 0);
-    Buf msg = {0};
+    NetBuf msg = {0};
     int msg_op = 0;
     int close_code = 1006;
     const char *close_why = "connection lost";
@@ -427,7 +423,7 @@ static int ws_main(void *arg) {
             char chunk[16384];
             ssize_t got = recv(fd, chunk, sizeof chunk, 0);
             if (got <= 0) break;
-            buf_add(&in, chunk, (size_t)got);
+            net_buf_add(&in, chunk, (size_t)got);
         }
         // Parse every complete frame in the buffer.
         bool closed = false;
@@ -470,14 +466,14 @@ static int ws_main(void *arg) {
                     msg.len = 0;
                     msg_op = op;
                 }
-                buf_add(&msg, payload, (size_t)len);
+                net_buf_add(&msg, payload, (size_t)len);
                 if (fin && msg_op) {
                     push_event(a.gen, WS_EV_MESSAGE, msg.p, msg.len, msg_op);
                     msg.len = 0;
                     msg_op = 0;
                 }
             }
-            buf_drop(&in, h + (size_t)len);
+            net_buf_drop(&in, h + (size_t)len);
         }
         if (closed) break;
     }
