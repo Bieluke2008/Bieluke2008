@@ -5,6 +5,15 @@ Cada versión es una etiqueta de git (`vX.Y.Z`) y, a partir de la 0.2.0, una
 workflow **OpenFront Switch release** al subir la etiqueta). El número de
 versión está en `VERSION` y se ve en la pantalla de inicio de la app.
 
+## 0.9.1
+
+- NSP: el NACP es ahora el de `nacptool`, el que usan los NSP caseros, en vez
+  de uno escrito a mano que activaba la grabación de vídeo y no pedía usuario.
+  Con aquel, el sistema (AM) se caía al abrir la aplicación con el error
+  2128-0007. Sigue llevando el identificador propio en
+  `LocalCommunicationId`, que es lo que necesita el inalámbrico local. Al
+  abrir OpenFront instalado, la consola pide elegir usuario, como los juegos.
+
 ## 0.9.0
 
 - Multijugador «Inalámbrico local», como los juegos de la Switch: sin router,

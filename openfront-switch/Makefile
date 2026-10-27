@@ -82,12 +82,16 @@ export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
 all: $(BUILD)
 
 # The installable NSP's program: main (NSO) and main.npdm (nsp/openfront.json,
-# with the port's own title id). scripts/package-nsp.sh adds the rest.
+# with the port's own title id), and its control.nacp: nacptool's, the one
+# homebrew NSPs use, which already puts the title id in LocalCommunicationId[0]
+# (all the console's local wireless needs). scripts/package-nsp.sh adds the rest.
+NSP_TITLE_ID := 01004f50e0fa0000
 nsp-exefs: $(BUILD)
 	@mkdir -p nsp-exefs
 	@elf2nso $(TARGET).elf nsp-exefs/main
 	@npdmtool nsp/openfront.json nsp-exefs/main.npdm
-	@echo built ... nsp-exefs/main nsp-exefs/main.npdm
+	@nacptool --create "$(APP_TITLE)" "$(APP_AUTHOR)" "$(APP_VERSION)" nsp-exefs/control.nacp --titleid=$(NSP_TITLE_ID)
+	@echo built ... nsp-exefs/main nsp-exefs/main.npdm nsp-exefs/control.nacp
 
 $(BUILD):
 	@[ -f $(ROMFS)/engine.js ] || { echo "romfs/ is not ready: run scripts/build-romfs.sh first"; exit 1; }

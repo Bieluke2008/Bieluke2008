@@ -164,7 +164,7 @@ Switch; con el .nro, todas deben abrir el Homebrew Menu desde el mismo juego.
 **NSP instalable.** `make nsp-exefs` (NSO + `main.npdm` de
 `nsp/openfront.json`) y `scripts/package-nsp.sh` dejan
 `dist/openfront-nsp-kit-v*.zip` con `exefs/`, `control/` (NACP de
-`scripts/make-nacp.py` e icono), `romfs/` y los scripts que crean el NSP con
+`nacptool`, que ya pone el identificador en `LocalCommunicationId`, e icono), `romfs/` y los scripts que crean el NSP con
 hacBrewPack y el `prod.keys` de tu consola (sacado con Lockpick_RCM; las
 claves no se distribuyen). Instalarlo requiere los *sigpatches* de
 Atmosphère, como cualquier NSP casero.
