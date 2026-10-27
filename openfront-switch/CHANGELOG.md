@@ -5,6 +5,15 @@ Cada versión es una etiqueta de git (`vX.Y.Z`) y, a partir de la 0.2.0, una
 workflow **OpenFront Switch release** al subir la etiqueta). El número de
 versión está en `VERSION` y se ve en la pantalla de inicio de la app.
 
+## 0.9.2
+
+- NSP: el `main.npdm` lleva ahora la marca ForceDebug (bit 19 de las
+  capacidades de depuración, en ACI0 y ACID), como el `hbl.json` de
+  nx-hbloader. Atmosphère 1.8.0 y posteriores (firmware 19+) no arrancan los
+  títulos caseros sin ella, y en firmware 23 eso tiraba al gestor de
+  aplicaciones (AM, 0100000000000023) con el error 2128-0007 al abrir
+  OpenFront instalado.
+
 ## 0.9.1
 
 - NSP: el NACP es ahora el de `nacptool`, el que usan los NSP caseros, en vez
