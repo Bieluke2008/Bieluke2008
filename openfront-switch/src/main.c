@@ -52,6 +52,12 @@ static const char *const STRINGS[] = {
     "game_settings.start", "game_settings.instant_build", "game_settings.infinite_gold",
     "game_settings.infinite_troops", "game_settings.compact_map", "map_component.search_maps", "common.disabled",
     // The port's own
+    // Audio tab
+    "user_setting.tab_audio", "user_setting.audio_master", "user_setting.audio_master_desc",
+    "user_setting.audio_music", "user_setting.audio_music_desc", "user_setting.audio_effects",
+    "user_setting.audio_effects_desc", "user_setting.audio_alerts", "user_setting.audio_alerts_desc",
+    "user_setting.audio_ambience", "user_setting.audio_ambience_desc", "user_setting.audio_interface",
+    "user_setting.audio_interface_desc", "user_setting.audio_test", "user_setting.audio_reset", "port.music_missing",
     "port.title", "port.name", "port.speed", "port.loading", "port.controls", "port.controls_title", "port.quit",
     "port.default", "port.credits",
     NULL,
@@ -645,7 +651,7 @@ static void default_name(char *out, size_t n) {
 // plays the map (spawns, attacks around), and before the screenshot opens
 // the scene to check: radial, build, hover, panel, emoji, settings, exit,
 // send, chat, ghost, help, front (attack troop labels), bars (structure
-// progress bars).
+// progress bars), audio.
 
 static struct {
     const char *map;
@@ -749,6 +755,7 @@ static void autoplay(int frame) {
         else if (!strcmp(s, "emoji")) app_open_modal(MODAL_EMOJI, enemy);
         else if (!strcmp(s, "chat") && enemy) app_open_modal(MODAL_CHAT, enemy);
         else if (!strcmp(s, "settings")) app_open_modal(MODAL_SETTINGS, -1);
+        else if (!strcmp(s, "audio")) app_open_modal(MODAL_AUDIO, -1);
         else if (!strcmp(s, "exit")) app_open_modal(MODAL_EXIT, -1);
         else if (!strcmp(s, "help")) app.help_visible = true;
 

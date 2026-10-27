@@ -17,6 +17,7 @@ typedef enum {
     MODAL_SETTINGS,  // SettingsModal
     MODAL_EXIT,      // exit confirmation
     MODAL_CHAT,      // quick chat
+    MODAL_AUDIO,     // the settings' Audio tab
 } Modal;
 
 typedef struct {

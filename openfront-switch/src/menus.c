@@ -10,9 +10,11 @@
 #include <string.h>
 
 #include "app.h"
+#include "audio_panel.h"
 #include "hud.h"
 #include "json.h"
 #include "map.h"
+#include "sound.h"
 #include "ui.h"
 
 // Tailwind v4 palette entries the modals use.
@@ -968,7 +970,7 @@ static void settings_modal(void) {
     const cJSON *mods = jget(app.frame, "modifiers");
     bool has_mods = jlen(mods) > 0;
     const float W = 448;
-    float h = 61 + 16 + 68 + 12 + 68 + (has_mods ? 12 + 16 + 62 : 0) + 12 + 16 + 13 + 68 + 16;
+    float h = 61 + 16 + 68 + 12 + 68 + 12 + 68 + (has_mods ? 12 + 16 + 62 : 0) + 12 + 16 + 13 + 68 + 16;
     Rect card = {PAGE_W / 2.0f - W / 2, PAGE_H / 2.0f - h / 2, W, h};
     gfx_box(card, 8, hex(SLATE_800), 1, hex(TW_SLATE_600));
     ui_block(card);
@@ -994,6 +996,13 @@ static void settings_modal(void) {
     if (menu_row(1, x, y, w, "TreeIconWhite", T("user_setting.toggle_terrain"), T("user_setting.toggle_view_desc"),
                  T(app.alt_view ? "user_setting.on" : "user_setting.off"), hex(TW_WHITE))) {
         app.alt_view = !app.alt_view;
+    }
+    y += 68 + 12;
+    char vol[96];
+    snprintf(vol, sizeof vol, "%s: %d", T("user_setting.audio_master"), (int)lroundf(sound_volume(VOL_MASTER) * 100));
+    if (menu_row(3, x, y, w, "music", T("user_setting.tab_audio"), vol, NULL, hex(TW_WHITE))) {
+        app_open_modal(MODAL_AUDIO, -1);
+        return;
     }
     y += 68;
     if (has_mods) {
@@ -1184,6 +1193,9 @@ void menus_draw_modals(void) {
         case MODAL_SETTINGS: settings_modal(); break;
         case MODAL_EXIT: exit_confirm(); break;
         case MODAL_CHAT: chat_modal(); break;
+        case MODAL_AUDIO:
+            if (audio_panel_draw()) app_open_modal(MODAL_SETTINGS, -1);
+            break;
         default: break;
     }
     if (M.win_open && app.modal == MODAL_NONE) win_modal();
@@ -1192,6 +1204,10 @@ void menus_draw_modals(void) {
 bool menus_win_open(void) { return M.win_open; }
 
 bool menus_back(void) {
+    if (app.modal == MODAL_AUDIO) {
+        app_open_modal(MODAL_SETTINGS, -1);
+        return true;
+    }
     if (app.modal == MODAL_SEND) {
         app_open_modal(MODAL_PANEL, app.modal_player);
         return true;
