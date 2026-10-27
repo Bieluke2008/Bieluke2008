@@ -13,6 +13,7 @@
 #include "home.h"
 #include "json.h"
 #include "lanhost.h"
+#include "ldn.h"
 #include "net.h"
 #include "settings.h"
 #include "solo.h"
@@ -53,6 +54,8 @@ static struct {
     char token[40];
     bool is_host;       // the lobby is ours
     bool lan_host;      // ...and this console is its server (lanhost.c)
+    bool wireless;      // the console's local wireless (LDN) instead of Wi-Fi
+    bool scanning;      // LDN station open and scanning
     char lan_hint[160]; // how other consoles join it
     int auto_start;     // tests: start once this many players are in
     int auto_lan;       // tests: 1 host on this console, 2 join the first lobby heard
@@ -179,6 +182,13 @@ static void connect_lobby(const char *worker_path, const char *name) {
     M.st = ST_LOBBY;
 }
 
+/** An LDN failure, with what usually fixes it. */
+static void ldn_error(const char *detail) {
+    char msg[256];
+    snprintf(msg, sizeof msg, "%s (%s)", ldn_supported() ? T("port.mp_ldn_failed") : T("port.mp_ldn_console_only"), detail);
+    set_error(msg);
+}
+
 /** Hosts a lobby on this console: its own game server, joined like any other. */
 static void host_here(const char *name) {
     M.error[0] = 0;
@@ -186,8 +196,17 @@ static void host_here(const char *name) {
         set_error(T("port.mp_no_network"));
         return;
     }
+    if (M.wireless) {
+        M.scanning = false;
+        const char *e = ldn_host_open(name);
+        if (e) {
+            ldn_error(e);
+            return;
+        }
+    }
     int port = lan_host_start(M.romfs, token(), M.code, sizeof M.code);
     if (!port) {
+        ldn_close();
         set_error(T("port.mp_host_failed"));
         return;
     }
@@ -198,12 +217,34 @@ static void host_here(const char *name) {
     net_local_ip(ip, sizeof ip);
     char addr[64];
     snprintf(addr, sizeof addr, "%s:%d", ip[0] ? ip : "?", port);
-    const char *f = T("port.mp_switch_hint");
+    const char *f = T(M.wireless ? "port.mp_ldn_hint" : "port.mp_switch_hint");
     const char *at = strstr(f, "{ip}");
     if (at) snprintf(M.lan_hint, sizeof M.lan_hint, "%.*s%s%s", (int)(at - f), f, addr, at + 4);
-    else snprintf(M.lan_hint, sizeof M.lan_hint, "%s %s", f, addr);
+    else snprintf(M.lan_hint, sizeof M.lan_hint, "%s", f);
     printf("lobby %s on lan %s\n", M.code, addr);
     fflush(stdout);
+    connect_lobby("w0", name);
+}
+
+/** Joins a lobby found on the console's local wireless: connect to its network, then to its server. */
+static void join_ldn(const LdnGame *g, const char *name) {
+    M.error[0] = 0;
+    if (strcmp(g->version, OPENFRONT_VERSION)) {
+        char msg[256];
+        snprintf(msg, sizeof msg, "%s (%s / %s)", T("port.mp_version_diff"), g->version, OPENFRONT_VERSION);
+        set_error(msg);
+        return;
+    }
+    char ip[48];
+    const char *e = ldn_join(g->index, ip, sizeof ip);
+    M.scanning = false;
+    if (e) {
+        ldn_error(e);
+        return;
+    }
+    snprintf(M.host, sizeof M.host, "%s", ip);
+    M.port = g->port;
+    snprintf(M.code, sizeof M.code, "%s", g->id);
     connect_lobby("w0", name);
 }
 
@@ -225,6 +266,8 @@ static void join_lan(const LanGame *g, const char *name) {
 static void stop_hosting(void) {
     if (M.lan_host) lan_host_stop();
     M.lan_host = false;
+    ldn_close();
+    M.scanning = false;
 }
 
 static void leave_lobby(void) {
@@ -379,7 +422,8 @@ static bool lan_row(int i, const LanGame *g, Rect r) {
     char sub[256];
     if (other_version) snprintf(sub, sizeof sub, "%s (%s)", T("port.mp_version_diff"), g->version);
     else if (g->started) snprintf(sub, sizeof sub, "%s", T("port.mp_in_progress"));
-    else snprintf(sub, sizeof sub, "%.47s · %.15s", g->ip, g->id);
+    else if (g->ip[0]) snprintf(sub, sizeof sub, "%.47s · %.15s", g->ip, g->id);
+    else snprintf(sub, sizeof sub, "%.15s", g->id);
     gfx_text(FONT_400, 12, sub, r.x + 16, r.y + 30, 16, other_version ? hex(0xf87171) : hex(MUTED), ALIGN_LEFT);
     char join[48];
     snprintf(join, sizeof join, "%s", T("private_lobby.play"));
@@ -388,59 +432,124 @@ static bool lan_row(int i, const LanGame *g, Rect r) {
     return ui_button(id, r);
 }
 
+/** The Wi-Fi / local wireless switch above the menu. */
+static void mode_tabs(float x, float y, float w, const char *name) {
+    const char *labels[2] = {T("port.mp_wifi"), T("port.mp_local_wireless")};
+    float tw = (w - 8) / 2;
+    gfx_fill_rrect((Rect){x, y, w, 40}, 10, hex(ITEM_BG));
+    for (int i = 0; i < 2; i++) {
+        Rect r = {x + 4 + (tw)*(float)i, y + 4, tw, 32};
+        uint32_t id = ui_id("multi-mode", i);
+        bool on = M.wireless == (i == 1);
+        bool hover = ui_hover(id, r);
+        if (on) gfx_fill_rrect(r, 8, hex(ORANGE));
+        else if (hover) gfx_fill_rrect(r, 8, hex(0x2a1834));
+        char t[64];
+        snprintf(t, sizeof t, "%s", labels[i]);
+        gfx_upper(t);
+        gfx_text(FONT_700, 14, t, r.x + r.w / 2, r.y + 7, 18, hex(TW_WHITE), ALIGN_CENTER);
+        if (ui_button(id, r) && !on) {
+            M.wireless = i == 1;
+            M.error[0] = 0;
+            if (!M.wireless) {
+                ldn_close();
+                M.scanning = false;
+            }
+        }
+    }
+    // The local wireless list needs a scanning station.
+    if (M.wireless && !M.scanning && M.st == ST_MENU && !M.error[0]) {
+        const char *e = ldn_scan_start(name);
+        if (e) ldn_error(e);
+        else M.scanning = true;
+    }
+}
+
 static MultiResult draw_menu(const StartOptions *o, const Input *in) {
     MultiResult result = MULTI_NONE;
     home_backdrop();
     const float W = 600, X = PAGE_W / 2.0f - W / 2;
     gfx_box((Rect){X - 24, 100, W + 48, 528}, 14, alpha(hex(CARD_BG), 0.96f), 1, hex(CARD_BORDER));
-    card_title(T("port.multiplayer"), 116);
+    card_title(T("port.multiplayer_title"), 112);
     bool busy = M.st != ST_MENU;
+    mode_tabs(X, 156, W, o->name);
+    if (in->pressed[BTN_L] || in->pressed[BTN_R]) {
+        M.wireless = !M.wireless;
+        M.error[0] = 0;
+        if (!M.wireless) ldn_close(), M.scanning = false;
+    }
 
     // Host here: this console is the server.
-    if ((home_button("multi-host", (Rect){X, 164, W, 60}, T("port.mp_host_here"), true, 20) || in->pressed[BTN_PLUS]) && !busy)
+    if ((home_button("multi-host", (Rect){X, 210, W, 56}, T("port.mp_host_here"), true, 20) || in->pressed[BTN_PLUS]) && !busy)
         host_here(o->name);
 
-    // Lobbies other consoles announce.
-    label(T("port.mp_lan_games"), X, 240);
+    // Lobbies other consoles announce (Wi-Fi broadcast or LDN scan).
+    label(T("port.mp_lan_games"), X, 282);
+    int max_rows = M.wireless ? 3 : 2;
     LanGame games[3];
-    int ng = lan_discover_list(games, 3);
-    float y = 264;
+    LdnGame lgames[3];
+    int ng = 0;
+    if (M.wireless) {
+        ng = ldn_scan_list(lgames, max_rows);
+        for (int i = 0; i < ng; i++) {
+            LanGame g = {.port = lgames[i].port, .players = lgames[i].players, .started = lgames[i].started};
+            snprintf(g.id, sizeof g.id, "%s", lgames[i].id);
+            snprintf(g.host, sizeof g.host, "%s", lgames[i].host);
+            snprintf(g.map, sizeof g.map, "%s", lgames[i].map);
+            snprintf(g.version, sizeof g.version, "%s", lgames[i].version);
+            games[i] = g;
+        }
+    } else {
+        ng = lan_discover_list(games, max_rows);
+    }
+    float y = 304;
     for (int i = 0; i < ng; i++) {
-        if (lan_row(i, &games[i], (Rect){X, y, W, 52}) && !busy) join_lan(&games[i], o->name);
+        if (lan_row(i, &games[i], (Rect){X, y, W, 52}) && !busy) {
+            if (M.wireless) join_ldn(&lgames[i], o->name);
+            else join_lan(&games[i], o->name);
+        }
         y += 58;
     }
     if (ng == 0) {
         gfx_box((Rect){X, y, W, 52}, 10, alpha(hex(ITEM_BG), 0.5f), 1, hex(ITEM_BORDER));
-        gfx_text(FONT_400, 14, T("port.mp_searching"), PAGE_W / 2.0f, y + 16, 20, hex(MUTED), ALIGN_CENTER);
+        gfx_text(FONT_400, 14, T(M.wireless ? "port.mp_searching_ldn" : "port.mp_searching"), PAGE_W / 2.0f, y + 16, 20,
+                 hex(MUTED), ALIGN_CENTER);
         y += 58;
     }
     // Tests (multi_auto with "lan"): host, or join the first lobby heard.
     if (M.auto_lan == 1 && !busy) M.auto_lan = 0, host_here(o->name);
-    if (M.auto_lan == 2 && ng > 0 && !busy) M.auto_lan = 0, join_lan(&games[0], o->name);
-    paragraph(T("port.mp_same_wifi"), X, y + 2, W, 13, hex(MUTED));
+    if (M.auto_lan == 2 && ng > 0 && !busy && !M.wireless) M.auto_lan = 0, join_lan(&games[0], o->name);
+    paragraph(T(M.wireless ? "port.mp_ldn_help" : "port.mp_same_wifi"), X, y + 2, W, 13, hex(MUTED));
 
-    // A PC running OpenFront's server (with browsers).
-    label(T("port.mp_pc_server"), X, 452);
-    const float bw = 112;
-    Rect sr = {X, 476, W - 2 * (bw + 12), 48};
-    uint32_t sid = ui_id("multi-server", 0);
-    bool sh = ui_hover(sid, sr);
-    gfx_box(sr, 10, hex(sh ? 0x2a1834 : ITEM_BG), 1, sh ? alpha(hex(ORANGE), 0.6f) : hex(ITEM_BORDER));
-    gfx_text(FONT_600, 18, M.server[0] ? M.server : "192.168.1.?:9000", sr.x + 16, sr.y + 12, 24,
-             M.server[0] ? hex(TW_WHITE) : hex(MUTED), ALIGN_LEFT);
-    if (ui_button(sid, sr) || in->pressed[BTN_Y]) ask_text(M.server, T("port.mp_server"), true, M.server, sizeof M.server);
-    if (home_button("multi-create", (Rect){sr.x + sr.w + 12, 476, bw, 48}, T("port.mp_create_short"), false, 15) && !busy)
-        create_lobby();
-    if (home_button("multi-join", (Rect){sr.x + sr.w + 24 + bw, 476, bw, 48}, T("port.mp_join_short"), false, 15) && !busy) {
-        char code[32] = "";
-        if (ask_text("", T("private_lobby.enter_id"), false, code, sizeof code)) join_lobby(code);
+    if (!M.wireless) {
+        // A PC running OpenFront's server (with browsers).
+        label(T("port.mp_pc_server"), X, 452);
+        const float bw = 112;
+        Rect sr = {X, 476, W - 2 * (bw + 12), 48};
+        uint32_t sid = ui_id("multi-server", 0);
+        bool sh = ui_hover(sid, sr);
+        gfx_box(sr, 10, hex(sh ? 0x2a1834 : ITEM_BG), 1, sh ? alpha(hex(ORANGE), 0.6f) : hex(ITEM_BORDER));
+        gfx_text(FONT_600, 18, M.server[0] ? M.server : "192.168.1.?:9000", sr.x + 16, sr.y + 12, 24,
+                 M.server[0] ? hex(TW_WHITE) : hex(MUTED), ALIGN_LEFT);
+        if (ui_button(sid, sr) || in->pressed[BTN_Y]) ask_text(M.server, T("port.mp_server"), true, M.server, sizeof M.server);
+        if (home_button("multi-create", (Rect){sr.x + sr.w + 12, 476, bw, 48}, T("port.mp_create_short"), false, 15) && !busy)
+            create_lobby();
+        if (home_button("multi-join", (Rect){sr.x + sr.w + 24 + bw, 476, bw, 48}, T("port.mp_join_short"), false, 15) &&
+            !busy) {
+            char code[32] = "";
+            if (ask_text("", T("private_lobby.enter_id"), false, code, sizeof code)) join_lobby(code);
+        }
     }
 
     if (busy) gfx_text(FONT_600, 15, T("port.mp_connecting"), PAGE_W / 2.0f, 534, 20, hex(ORANGE), ALIGN_CENTER);
-    else if (M.error[0]) paragraph(M.error, X, 532, W, 13, hex(0xf87171));
-    if (home_button("multi-back", (Rect){X, 568, W, 44}, T("common.back"), false, 15)) result = MULTI_BACK;
+    else if (M.error[0]) paragraph(M.error, X, 530, W, 13, hex(0xf87171));
+    if (home_button("multi-back", (Rect){X, 572, W, 44}, T("common.back"), false, 15)) result = MULTI_BACK;
     if (in->pressed[BTN_B] && !busy) result = MULTI_BACK;
-    if (result == MULTI_BACK) lan_discover_stop();
+    if (result == MULTI_BACK) {
+        lan_discover_stop();
+        ldn_close();
+        M.scanning = false;
+    }
     return result;
 }
 

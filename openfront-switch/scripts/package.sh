@@ -29,6 +29,11 @@ datos) y con la misma version del port. Una entra en Multijugador y pulsa
 la tocan para entrar. Si no aparece, usa "Unirse" con la IP que muestra la
 anfitriona (IP:47801) y el codigo de la sala.
 
+Inalambrico local (sin router): en Multijugador elige "Inalambrico local"
+(o L/R). Funciona entre Switch con el NSP instalado (ver el kit
+openfront-nsp-kit); con este .nro, solo si todas abren el Homebrew Menu
+desde el mismo juego.
+
 Multijugador con navegadores (servidor en un PC):
 1. En un PC de tu red instala Git (https://git-scm.com) y Node.js 24
    (https://nodejs.org).

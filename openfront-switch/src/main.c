@@ -23,6 +23,7 @@
 #include "json.h"
 #include "map.h"
 #include "lanhost.h"
+#include "ldn.h"
 #include "menus.h"
 #include "multi.h"
 #include "net.h"
@@ -85,7 +86,9 @@ static const char *const STRINGS[] = {
     "private_lobby.joined_waiting", "host_modal.players", "host_modal.host_badge", "host_modal.waiting",
     "game_starting_modal.title", "port.mp_host_here", "port.mp_lan_games", "port.mp_searching", "port.mp_same_wifi",
     "port.mp_pc_server", "port.mp_create_short", "port.mp_join_short", "port.mp_in_progress", "port.mp_version_diff",
-    "port.mp_switch_hint", "port.mp_host_failed", "private_lobby.play",
+    "port.mp_switch_hint", "port.mp_host_failed", "private_lobby.play", "port.multiplayer_title", "port.mp_wifi",
+    "port.mp_local_wireless", "port.mp_searching_ldn", "port.mp_ldn_help", "port.mp_ldn_hint", "port.mp_ldn_failed",
+    "port.mp_ldn_console_only",
     NULL,
 };
 
@@ -730,8 +733,9 @@ static void autoplay(int frame) {
         G.screen = SCREEN_SOLO;
         return;
     }
-    if (test.scene && !strcmp(test.scene, "multi")) {
+    if (test.scene && (!strcmp(test.scene, "multi") || !strcmp(test.scene, "multi-ldn"))) {
         if (frame == 2) multi_open(), G.screen = SCREEN_MULTI;
+        if (frame == 4 && !strcmp(test.scene, "multi-ldn")) G.in.pressed[BTN_R] = true;
         return;
     }
     // OPENFRONT_MP_SERVER=ip:port: host a lobby there (started once
@@ -1001,6 +1005,7 @@ int main(int argc, char **argv) {
     engine_shutdown();
     lan_host_stop();
     lan_discover_stop();
+    ldn_close();
     ws_close();
     net_shutdown();
     sound_shutdown();

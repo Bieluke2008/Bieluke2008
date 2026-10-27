@@ -77,9 +77,17 @@ export NROFLAGS += --icon=$(APP_ICON)
 export NROFLAGS += --nacp=$(CURDIR)/$(TARGET).nacp
 export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
 
-.PHONY: $(BUILD) clean all
+.PHONY: $(BUILD) clean all nsp-exefs
 
 all: $(BUILD)
+
+# The installable NSP's program: main (NSO) and main.npdm (nsp/openfront.json,
+# with the port's own title id). scripts/package-nsp.sh adds the rest.
+nsp-exefs: $(BUILD)
+	@mkdir -p nsp-exefs
+	@elf2nso $(TARGET).elf nsp-exefs/main
+	@npdmtool nsp/openfront.json nsp-exefs/main.npdm
+	@echo built ... nsp-exefs/main nsp-exefs/main.npdm
 
 $(BUILD):
 	@[ -f $(ROMFS)/engine.js ] || { echo "romfs/ is not ready: run scripts/build-romfs.sh first"; exit 1; }
@@ -88,7 +96,7 @@ $(BUILD):
 
 clean:
 	@echo clean ...
-	@rm -fr $(BUILD) $(TARGET).nro $(TARGET).nacp $(TARGET).elf
+	@rm -fr $(BUILD) $(TARGET).nro $(TARGET).nacp $(TARGET).elf nsp-exefs
 
 #---------------------------------------------------------------------------------
 else

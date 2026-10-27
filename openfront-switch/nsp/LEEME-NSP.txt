@@ -1,0 +1,26 @@
+OpenFront para Nintendo Switch - kit para crear el NSP (v@VERSION@)
+
+Instalado como NSP, OpenFront tiene su propio icono en el menu HOME y su
+propio identificador (@TITLEID@). Eso permite el multijugador
+"Inalambrico local" entre consolas sin router desde cualquier Switch que lo
+tenga instalado. Por lo demas es igual que el .nro.
+
+El NSP hay que crearlo tu: se firma y cifra con las claves de TU consola, que
+nadie mas puede repartir.
+
+1. Saca las claves de tu Switch con Lockpick_RCM (payload desde Hekate). Te
+   deja /switch/prod.keys en la microSD. Copia ese prod.keys en esta carpeta.
+2. Descarga hacBrewPack (https://github.com/The-4n/hacBrewPack, version
+   para Windows: hacbrewpack.exe) y copialo en esta carpeta.
+3. Abre crear-nsp-windows.bat (o crear-nsp.sh en Linux/Mac). Crea la carpeta
+   "nsp" con @TITLEID@.nsp dentro.
+4. Instala ese NSP en la Switch con tu instalador habitual (DBI, por
+   ejemplo). Para instalar NSP caseros, Atmosphere necesita los sigpatches.
+
+No compartas tu prod.keys con nadie. El NSP que generes tampoco hace falta
+compartirlo: cada uno puede crear el suyo con este kit.
+
+Multijugador inalambrico local: todas las Switch con el NSP instalado (la
+misma version). Una entra en Multijugador, elige "Inalambrico local" y
+"Crear partida en esta Switch"; las demas, tambien en "Inalambrico local", la
+ven en la lista y entran.

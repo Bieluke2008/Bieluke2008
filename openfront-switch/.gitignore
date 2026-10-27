@@ -8,3 +8,4 @@ tools/node_modules/
 dist/
 server/OpenFrontIO/
 openfront-settings.ini
+nsp-exefs/

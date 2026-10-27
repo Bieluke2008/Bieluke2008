@@ -5,6 +5,25 @@ Cada versión es una etiqueta de git (`vX.Y.Z`) y, a partir de la 0.2.0, una
 workflow **OpenFront Switch release** al subir la etiqueta). El número de
 versión está en `VERSION` y se ve en la pantalla de inicio de la app.
 
+## 0.9.0
+
+- Multijugador «Inalámbrico local», como los juegos de la Switch: sin router,
+  las consolas se conectan directamente. En Multijugador, el selector
+  Wi-Fi / Inalámbrico local (o L/R): la anfitriona crea la red local y la
+  anuncia; las demás la ven en la lista y entran. Por dentro es la misma
+  partida que por Wi-Fi (el servidor de la anfitriona), sobre la red LDN.
+- Kit para crear un NSP instalable (openfront-nsp-kit): el programa (NSO), su
+  `main.npdm` con un identificador de título propio (01004f50e0fa0000), el
+  NACP con ese identificador en `LocalCommunicationId` (lo que exige el
+  inalámbrico local), icono y datos, y `crear-nsp-windows.bat` /
+  `crear-nsp.sh`, que lo empaquetan con hacBrewPack y las claves de tu
+  consola (prod.keys de Lockpick_RCM; no se pueden incluir).
+- Con el NSP instalado, el inalámbrico local funciona entre cualquier Switch
+  que lo tenga. Con el .nro solo si todas abren el Homebrew Menu desde el
+  mismo juego (LDN usa el identificador del juego en ejecución).
+- Sin probar en consola: este entorno no tiene Switch ni claves; el modo LDN
+  y el NSP se han compilado y revisado (hactool), no ejecutado.
+
 ## 0.8.0
 
 - Multijugador entre Switch sin PC: «Crear partida en esta Switch» convierte

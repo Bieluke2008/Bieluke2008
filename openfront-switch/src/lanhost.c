@@ -20,6 +20,7 @@
 #endif
 
 #include "cJSON.h"
+#include "ldn.h"
 #include "netutil.h"
 #include "quickjs.h"
 
@@ -370,6 +371,8 @@ static void handle_frames(int i) {
 static void announce(void) {
     JSValue a[1] = {JS_NewInt32(sctx, port)};
     char *msg = call_str("announce", 1, a);
+    // On the console's local wireless network the lobby rides the LDN advertisement.
+    ldn_host_advertise(msg);
     struct sockaddr_in to = {0};
     to.sin_family = AF_INET;
     to.sin_port = htons(LAN_DISCOVERY_PORT);

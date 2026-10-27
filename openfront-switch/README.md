@@ -151,9 +151,23 @@ Menu.
 Wi-Fi, una elige Multijugador → «Crear partida en esta Switch» y las demás la
 tocan en «Partidas en tu red» (o «Unirse» con la IP que muestra la
 anfitriona, `IP:47801`, y el código). Todas deben tener la misma versión del
-port. El modo inalámbrico local de la consola (sin router) no está: Nintendo
-lo ata al identificador del juego, y en homebrew depende del juego desde el
-que se abre el Homebrew Menu.
+port.
+
+**Inalámbrico local (sin router).** En Multijugador, pestaña «Inalámbrico
+local»: la anfitriona abre una red local de la consola (LDN, `src/ldn.c`) y
+anuncia la sala en ella; las demás la buscan y se conectan, y la partida va
+por esa red igual que por Wi-Fi. LDN solo deja usar los identificadores de
+comunicación local del NACP de la aplicación que se está ejecutando: con el
+NSP instalado (identificador propio, ver abajo) funciona entre cualquier
+Switch; con el .nro, todas deben abrir el Homebrew Menu desde el mismo juego.
+
+**NSP instalable.** `make nsp-exefs` (NSO + `main.npdm` de
+`nsp/openfront.json`) y `scripts/package-nsp.sh` dejan
+`dist/openfront-nsp-kit-v*.zip` con `exefs/`, `control/` (NACP de
+`scripts/make-nacp.py` e icono), `romfs/` y los scripts que crean el NSP con
+hacBrewPack y el `prod.keys` de tu consola (sacado con Lockpick_RCM; las
+claves no se distribuyen). Instalarlo requiere los *sigpatches* de
+Atmosphère, como cualquier NSP casero.
 
 **Multijugador con navegadores (servidor en un PC).** En un PC de la misma red instala Git y
 Node.js 24 y abre `servidor-pc/iniciar-servidor-windows.bat` (o
