@@ -19,12 +19,12 @@ target_compile_definitions(quickjs PRIVATE _GNU_SOURCE)
 target_compile_options(quickjs PRIVATE -w)
 
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2 SDL2_ttf SDL2_image)
+pkg_check_modules(SDL2 REQUIRED IMPORTED_TARGET sdl2 SDL2_ttf SDL2_image SDL2_mixer)
 find_package(ZLIB REQUIRED)
 
 add_executable(openfront
   src/main.c src/engine.c src/input.c src/gfx.c src/ui.c src/hud.c src/map.c
-  src/radial.c src/menus.c src/solo.c src/native.c src/clocks.c deps/cjson/cJSON.c)
+  src/radial.c src/menus.c src/solo.c src/native.c src/clocks.c src/sound.c src/settings.c deps/cjson/cJSON.c)
 # DetMath's exp/log in native.c must round like the TS: no fused multiply-add.
 set_source_files_properties(src/native.c PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
 target_include_directories(openfront PRIVATE src deps/cjson)

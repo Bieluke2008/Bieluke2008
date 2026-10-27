@@ -14,6 +14,8 @@
 
 #include "app.h"
 #include "clocks.h"
+#include "settings.h"
+#include "sound.h"
 #include "engine.h"
 #include "gfx.h"
 #include "hud.h"
@@ -179,6 +181,9 @@ static void take_snapshot(void) {
     }
     G.snap.frame = NULL;
     engine_unlock();
+    char cues[sizeof s->sounds];
+    engine_take_sounds(cues, sizeof cues);
+    for (char *c = strtok(cues, "\n"); c; c = strtok(NULL, "\n")) sound_play(c);
     if (frame) {
         cJSON *f = cJSON_Parse(frame);
         free(frame);
@@ -482,8 +487,36 @@ static void draw_loading(void) {
     gfx_text(FONT_400, 20, msg, PAGE_W / 2.0f, PAGE_H / 2.0f - 14, 28, hex(TW_WHITE), ALIGN_CENTER);
 }
 
+/**
+ * AmbienceController: zoomed in (8 px a tile and more), the loop of the
+ * nearest city, factory, silo or SAM within 20 tiles of the view centre,
+ * fading up to its ceiling at full zoom.
+ */
+static void update_ambience(void) {
+    const float ZOOM_FROM = 8, ZOOM_MAX = 20, PEAK = 0.3f, RANGE = 20;
+    const char *track = NULL;
+    if (G.snap.status == GAME_RUNNING && app.cam.zoom >= ZOOM_FROM) {
+        float best = RANGE * RANGE + 1;
+        for (int i = 0; i < G.snap.nunits; i++) {
+            const UnitRec *u = &G.snap.units[i];
+            const char *t = u->kind == UNIT_CITY           ? "city"
+                            : u->kind == UNIT_FACTORY      ? "factory"
+                            : u->kind == UNIT_MISSILE_SILO ? "missile-silo"
+                            : u->kind == UNIT_SAM_LAUNCHER ? "sam-silo"
+                                                           : NULL;
+            if (!t) continue;
+            float dx = (float)u->x - app.cam.cx, dy = (float)u->y - app.cam.cy, d = dx * dx + dy * dy;
+            if (d <= RANGE * RANGE && d < best) best = d, track = t;
+        }
+    }
+    float gain = PEAK * fmaxf(0, fminf(1, (app.cam.zoom - ZOOM_FROM) / (ZOOM_MAX - ZOOM_FROM)));
+    sound_ambience(track, track ? gain : 0);
+}
+
 static void game_frame(const Input *in) {
     take_snapshot();
+    sound_music(true);
+    update_ambience();
     poll_results();
     radial_poll();
     menus_poll();
@@ -782,6 +815,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
+    settings_load();
+    sound_init(G.romfs);
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
     SDL_Window *win = SDL_CreateWindow("OpenFront", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, win_w, win_h, 0);
     G.ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -850,6 +885,8 @@ int main(int argc, char **argv) {
             SoloResult r = solo_draw(&G.opts, &app.speed_idx, &G.in);
             draw_cursor();
             ui_end();
+            sound_music(false);
+            sound_ambience(NULL, 0);
             if (r == SOLO_START) start_game();
             if (r == SOLO_QUIT) G.quit = true;
         } else {
@@ -864,6 +901,8 @@ int main(int argc, char **argv) {
     }
 
     engine_shutdown();
+    sound_shutdown();
+    settings_save();
     input_shutdown();
     map_shutdown();
     solo_shutdown();

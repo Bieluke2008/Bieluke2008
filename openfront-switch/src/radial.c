@@ -11,6 +11,7 @@
 
 #include "app.h"
 #include "json.h"
+#include "sound.h"
 #include "ui.h"
 
 #define PI_F 3.14159265f
@@ -241,6 +242,7 @@ static void select_item(int level, int index) {
     const cJSON *items = items_at(level);
     const cJSON *it = jat(items, index);
     if (!it || jbool(it, "disabled")) return;
+    sound_play("click");
     if (jlen(jget(it, "sub")) > 0) {
         R.path[level] = index;
         R.level = level + 1;

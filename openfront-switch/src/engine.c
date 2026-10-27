@@ -534,6 +534,9 @@ static void refresh_snapshot(double tick_ms) {
     JSValue tiles = call("tileUpdates", 0, NULL);
     JSValue frame = call("frame", 0, NULL);
     char *frame_json = to_cstr(frame);
+    JSValue cues = call("sounds", 0, NULL);
+    char *cue_text = to_cstr(cues);
+    JS_FreeValue(ctx, cues);
 
     size_t nl = 0;
     const double *ld = typed_data(labels, &nl, sizeof(double));
@@ -594,6 +597,14 @@ static void refresh_snapshot(double tick_ms) {
         snap.frame = frame_json;
         snap.frame_version++;
     }
+    if (cue_text && cue_text[0]) {
+        size_t used = strlen(snap.sounds);
+        if (used + strlen(cue_text) + 2 < sizeof snap.sounds) {
+            if (used) snap.sounds[used++] = '\n';
+            strcpy(snap.sounds + used, cue_text);
+        }
+    }
+    free(cue_text);
     SDL_UnlockMutex(snap_lock);
 
     JS_FreeValue(ctx, labels);
@@ -930,6 +941,13 @@ const Snapshot *engine_lock(void) {
 }
 
 void engine_unlock(void) { SDL_UnlockMutex(snap_lock); }
+
+void engine_take_sounds(char *out, size_t n) {
+    SDL_LockMutex(snap_lock);
+    snprintf(out, n, "%s", snap.sounds);
+    snap.sounds[0] = 0;
+    SDL_UnlockMutex(snap_lock);
+}
 
 const PlayerInfo *engine_player(int id) {
     static const PlayerInfo none = {{0}, {0}, 0, false};

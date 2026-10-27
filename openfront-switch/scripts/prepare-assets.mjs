@@ -7,6 +7,8 @@
 //   fonts/DejaVuSansMono*.ttf  its font-mono (player names in the hover card)
 //   atlases/ui-emoji.* the emoji the HUD's text uses that OpenFront's atlas lacks
 //   thumbnails/<map>.png  the map pictures of the Solo modal's map picker
+//   sounds/{effects,ambience}/*.mp3  the sound effects and structure ambience
+//   ui/background.jpg, ui/*.png  the home background and the Solo modal's icons
 //
 // usage: node scripts/prepare-assets.mjs <openfront-checkout> <inter-dir> <romfs-dir>
 import {
@@ -119,3 +121,43 @@ for (const m of readdirSync(join(res, "maps"))) {
   thumbs++;
 }
 console.log(`thumbnails: ${thumbs}`);
+
+// Sound effects and structure ambience, as the web client plays them. (Its
+// music is under proprietary/ and is not ours to ship: the player can copy
+// it to the microSD, see README.)
+for (const kind of ["effects", "ambience"]) {
+  const src = join(res, "sounds", kind);
+  const dst = join(romfs, "sounds", kind);
+  mkdirSync(dst, { recursive: true });
+  for (const f of readdirSync(src)) {
+    if (f.endsWith(".mp3")) copyFileSync(join(src, f), join(dst, f));
+  }
+}
+console.log("sounds: effects, ambience");
+
+// The home page's background art, at the console's width.
+const uiOut = join(romfs, "ui");
+mkdirSync(uiOut, { recursive: true });
+await sharp(join(res, "images", "background.webp"))
+  .resize({ width: 1920, withoutEnlargement: true })
+  .jpeg({ quality: 85 })
+  .toFile(join(uiOut, "background.jpg"));
+
+// The Solo modal's inline SVG icons (section headers, difficulty skulls),
+// taken from the client's source and rasterized white for tinting.
+const clientDir = join(resolve(ofArg), "src", "client", "components");
+const configSrc = readFileSync(join(clientDir, "GameConfigSettings.ts"), "utf8");
+const diffSrc = readFileSync(join(clientDir, "Difficulties.ts"), "utf8");
+const whiteSvg = (svg) => svg.replaceAll("currentColor", "#ffffff").replace(/height="100%"\s*width="100%"/, "");
+for (const name of ["MAP_ICON", "DIFFICULTY_ICON", "MODE_ICON", "OPTIONS_ICON", "ENABLES_ICON"]) {
+  const m = configSrc.match(new RegExp(`const ${name} = svg\`([\\s\\S]*?)\`;`));
+  if (!m) throw new Error("icon not found: " + name);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#ffffff">${m[1]}</svg>`;
+  writeFileSync(join(uiOut, name.toLowerCase() + ".png"), new Resvg(svg, { fitTo: { mode: "height", value: 64 } }).render().asPng());
+}
+for (const name of ["skull", "burningSkull"]) {
+  const m = diffSrc.match(new RegExp(`const ${name} = html\`(<svg[\\s\\S]*?</svg>)\`;`));
+  if (!m) throw new Error("icon not found: " + name);
+  writeFileSync(join(uiOut, name + ".png"), new Resvg(whiteSvg(m[1]), { fitTo: { mode: "height", value: 96 } }).render().asPng());
+}
+console.log("ui: background, icons");

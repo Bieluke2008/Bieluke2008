@@ -25,7 +25,8 @@ import type { Unit } from "@openfront/engine/game/Game";
 import { ghost, placeGhost } from "./build";
 import { bindNativeMaps } from "./native/maps";
 import { colorNewPlayers, colorTable, resetColors } from "./colors";
-import { actionableClick, processUpdates, resetEvents } from "./events";
+import { actionableClick, processUpdates, resetEvents, sounds } from "./events";
+import { resetSounds, soundUpdates } from "./sound";
 import { attackAction, frameModel, hudUpdates, LB, resetHud } from "./hud";
 import { initI18n, loadJson, ROMFS, t } from "./i18n";
 import { emojiList, hoverInfo, playerAction, playerIcons, playerPanel, quickChat, sendEmoji, sendQuickChat } from "./panel";
@@ -153,6 +154,7 @@ function onUpdate(gu: GameUpdateViewData | ErrorUpdate): void {
   if (colorNewPlayers()) playersVersion++;
   processUpdates(gu);
   hudUpdates(gu);
+  soundUpdates(gu);
 }
 
 async function start(opts: StartOptions): Promise<void> {
@@ -250,6 +252,7 @@ function clickTile(a: { x: number; y: number }): string | null {
   const my = me();
   if (g.isLand(tile) && !g.hasOwner(tile) && g.inSpawnPhase() && !g.config().isRandomSpawn()) {
     S.pendingIntents.push({ type: "spawn", tile });
+    sounds.push("spawn");
     return "spawn";
   }
   if (g.inSpawnPhase() || my === null || !my.isAlive()) return null;
@@ -461,6 +464,7 @@ const OF = {
     tileBatch = [];
     resetColors();
     resetEvents();
+    resetSounds();
     resetHud();
     startOptions = opts;
     start(opts).catch((e: unknown) => {
@@ -654,6 +658,11 @@ const OF = {
 
   frame(): string {
     return frameModel();
+  },
+
+  /** The cues queued since the last call, one per line (src/sound.c plays them). */
+  sounds(): string {
+    return sounds.splice(0, sounds.length).join("\n");
   },
 
   /** RPC from the renderer: OF.call("radial", '{"x":1,"y":2}') -> JSON. */

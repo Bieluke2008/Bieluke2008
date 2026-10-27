@@ -4,6 +4,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #define MAX_PLAYERS 4096
@@ -93,6 +94,7 @@ typedef struct {
     UnitRec *units;
     int nattacks;
     AttackLabel attacks[MAX_ATTACK_LABELS];
+    char sounds[1024];       // queued cue names, '\n'-separated; the renderer drains it
     char *frame;             // the adapter's HUD model (JSON), may be NULL
     int frame_version;
     uint8_t *relations;      // MAX_REL x MAX_REL: 1 friendly, 2 embargo
@@ -132,6 +134,8 @@ char *engine_result(int id);
 
 /** Locks the snapshot for reading. */
 const Snapshot *engine_lock(void);
+/** Moves the queued sound cue names ('\n'-separated) into `out` and clears the queue. */
+void engine_take_sounds(char *out, size_t n);
 void engine_unlock(void);
 
 /** Static player info by small id; safe to read while the snapshot is locked. */

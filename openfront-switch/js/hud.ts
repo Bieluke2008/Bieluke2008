@@ -63,6 +63,7 @@ export function hudUpdates(gu: GameUpdateViewData): void {
   if (my && !deathShown && my.hasSpawned() && !my.isAlive()) {
     deathShown = true;
     winner = { text: t("win_modal.died"), won: false, id: ++winnerSeq };
+    sounds.push("defeat");
   }
   for (const w of u[GameUpdateType.Win]) {
     const win = w.winner;
@@ -73,10 +74,13 @@ export function hudUpdates(gu: GameUpdateViewData): void {
         win[1] === CLIENT_ID
           ? { text: t("win_modal.you_won"), won: true, id: ++winnerSeq }
           : { text: t("win_modal.other_won", { player: p?.displayName() ?? win[1] }), won: false, id: ++winnerSeq };
+      sounds.push(win[1] === CLIENT_ID ? "victory" : "defeat");
     } else if (win[0] === "nation") {
       winner = { text: t("win_modal.nation_won", { nation: win[1] }), won: false, id: ++winnerSeq };
+      sounds.push("defeat");
     } else {
       winner = { text: t("win_modal.other_won", { player: win[1] }), won: false, id: ++winnerSeq };
+      sounds.push("defeat");
     }
   }
 }
@@ -359,7 +363,6 @@ function modifiers(): string[] {
 export function frameModel(): string {
   const g = game();
   const my = me();
-  const drained = sounds.splice(0, sounds.length);
   return JSON.stringify({
     tick: g.ticks(),
     spawn: g.inSpawnPhase(),
@@ -374,7 +377,6 @@ export function frameModel(): string {
     events: eventsModel(),
     winner,
     modifiers: modifiers(),
-    sounds: drained,
     msgType: MessageType.CHAT,
   });
 }
