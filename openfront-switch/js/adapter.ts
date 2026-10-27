@@ -32,6 +32,20 @@ import { bindNativeMaps } from "./native/maps";
 import { colorNewPlayers, colorTable, resetColors } from "./colors";
 import { actionableClick, processUpdates, resetEvents, sounds } from "./events";
 import { resetSounds, soundUpdates } from "./sound";
+import {
+  mpConfig,
+  mpConnect,
+  mpInGame,
+  mpLeave,
+  mpLobby,
+  mpNetEvent,
+  mpPause,
+  mpPoll,
+  mpStartGame,
+  mpStartTimer,
+  mpUpdate,
+  nextTurn,
+} from "./mp";
 import { attackAction, frameModel, hudUpdates, LB, resetHud } from "./hud";
 import { initI18n, loadJson, ROMFS, t } from "./i18n";
 import { emojiList, hoverInfo, playerAction, playerIcons, playerPanel, quickChat, sendEmoji, sendQuickChat } from "./panel";
@@ -46,7 +60,7 @@ declare const host: {
 
 // --- Map list ---------------------------------------------------------------
 
-interface MapEntry {
+export interface MapEntry {
   folder: string;
   type: GameMapType;
   name: string;
@@ -126,7 +140,7 @@ function mapList(): MapEntry[] {
 
 // --- Game ---------------------------------------------------------------------
 
-interface StartOptions {
+export interface StartOptions {
   map: number;
   difficulty: number;
   bots: number;
@@ -187,10 +201,49 @@ function onUpdate(gu: GameUpdateViewData | ErrorUpdate): void {
   processUpdates(gu);
   hudUpdates(gu);
   soundUpdates(gu);
+  mpUpdate(gu);
 }
 
-async function start(opts: StartOptions): Promise<void> {
+/** SinglePlayerModal.startGame()'s config for the Solo modal's options. */
+export function configFromOptions(opts: StartOptions, gameType: GameType) {
   const entry = mapList()[opts.map];
+  const difficulty = [Difficulty.Easy, Difficulty.Medium, Difficulty.Hard, Difficulty.Impossible][opts.difficulty];
+  const teams = opts.gameMode === 1;
+  return {
+    gameMap: entry.type,
+    gameMapSize: GameMapSize.Compact,
+    gameType,
+    gameMode: teams ? GameMode.Team : GameMode.FFA,
+    playerTeams: TEAM_COUNTS[opts.teamCount ?? 0] ?? 2,
+    difficulty,
+    maxTimerValue: opts.maxTimer !== undefined ? Math.max(1, Math.min(120, opts.maxTimer)) : undefined,
+    bots: opts.bots,
+    nations: opts.nations < 0 ? "default" : opts.nations === 0 ? "disabled" : opts.nations,
+    infiniteGold: opts.infiniteGold ?? false,
+    infiniteTroops: opts.infiniteTroops ?? false,
+    donateGold: teams,
+    donateTroops: teams,
+    instantBuild: opts.instantBuild ?? false,
+    randomSpawn: opts.randomSpawn ?? false,
+    disabledUnits: SOLO_UNIT_OPTIONS.filter((_, i) => ((opts.disabledUnits ?? 0) >> i) & 1),
+    ...(opts.goldMultiplier ? { goldMultiplier: opts.goldMultiplier } : {}),
+    ...(opts.startingGold !== undefined ? { startingGold: Math.round(opts.startingGold * 1_000_000) } : {}),
+    ...(opts.allianceMinutes !== undefined ? { customAllianceDuration: opts.allianceMinutes } : {}),
+    ...(opts.waterNukes ? { waterNukes: true } : {}),
+    ...(opts.doomsdaySpeed !== undefined && opts.doomsdaySpeed >= 0
+      ? { doomsdayClock: { enabled: true, speed: DOOMSDAY_CLOCK_SPEEDS[opts.doomsdaySpeed] ?? "normal" } }
+      : {}),
+    ...(opts.overtime !== undefined ? { overtime: { enabled: true, startMinutes: opts.overtime } } : {}),
+  };
+}
+
+/** The map list entry of a map type, or undefined when the port lacks it. */
+export function mapEntryOf(type: GameMapType): MapEntry | undefined {
+  return mapList().find((m) => m.type === type);
+}
+
+/** Loads the map and creates the engine's GameRunner for `gameStart`. */
+export async function startRunner(gameStart: GameStartInfo, clientID: string, entry: MapEntry): Promise<void> {
   const base = ROMFS + "maps/" + entry.folder + "/";
   const manifest = loadJson(base + "manifest.json") as MapManifest;
   setNationFlags([...manifest.nations, ...(manifest.additionalNations ?? [])]);
@@ -199,44 +252,9 @@ async function start(opts: StartOptions): Promise<void> {
     if (b === null) throw new Error("missing " + base + name);
     return new Uint8Array(b);
   };
-  const difficulty = [Difficulty.Easy, Difficulty.Medium, Difficulty.Hard, Difficulty.Impossible][opts.difficulty];
-  const teams = opts.gameMode === 1;
-  const gameStart = {
-    // A fixed seed (benchmarks) makes the game, bots and nations repeat.
-    gameID: opts.seed ? "SWITCH" + opts.seed : "SWITCH" + Math.floor(host.now()).toString(36).toUpperCase(),
-    lobbyCreatedAt: 0,
-    players: [{ clientID: CLIENT_ID, username: opts.name, clanTag: null }],
-    // SinglePlayerModal.startGame()'s config.
-    config: {
-      gameMap: entry.type,
-      gameMapSize: GameMapSize.Compact,
-      gameType: GameType.Singleplayer,
-      gameMode: teams ? GameMode.Team : GameMode.FFA,
-      playerTeams: TEAM_COUNTS[opts.teamCount ?? 0] ?? 2,
-      difficulty,
-      maxTimerValue: opts.maxTimer !== undefined ? Math.max(1, Math.min(120, opts.maxTimer)) : undefined,
-      bots: opts.bots,
-      nations: opts.nations < 0 ? "default" : opts.nations === 0 ? "disabled" : opts.nations,
-      infiniteGold: opts.infiniteGold ?? false,
-      infiniteTroops: opts.infiniteTroops ?? false,
-      donateGold: teams,
-      donateTroops: teams,
-      instantBuild: opts.instantBuild ?? false,
-      randomSpawn: opts.randomSpawn ?? false,
-      disabledUnits: SOLO_UNIT_OPTIONS.filter((_, i) => ((opts.disabledUnits ?? 0) >> i) & 1),
-      ...(opts.goldMultiplier ? { goldMultiplier: opts.goldMultiplier } : {}),
-      ...(opts.startingGold !== undefined ? { startingGold: Math.round(opts.startingGold * 1_000_000) } : {}),
-      ...(opts.allianceMinutes !== undefined ? { customAllianceDuration: opts.allianceMinutes } : {}),
-      ...(opts.waterNukes ? { waterNukes: true } : {}),
-      ...(opts.doomsdaySpeed !== undefined && opts.doomsdaySpeed >= 0
-        ? { doomsdayClock: { enabled: true, speed: DOOMSDAY_CLOCK_SPEEDS[opts.doomsdaySpeed] ?? "normal" } }
-        : {}),
-      ...(opts.overtime !== undefined ? { overtime: { enabled: true, startMinutes: opts.overtime } } : {}),
-    },
-  } as unknown as GameStartInfo;
   S.runner = await createGameRunner(
     gameStart,
-    CLIENT_ID,
+    clientID,
     {
       map: entry.type,
       mapSize: GameMapSize.Compact,
@@ -249,6 +267,18 @@ async function start(opts: StartOptions): Promise<void> {
   bindNativeMaps(S.runner.game);
   colorNewPlayers();
   playersVersion++;
+}
+
+async function start(opts: StartOptions): Promise<void> {
+  const entry = mapList()[opts.map];
+  const gameStart = {
+    // A fixed seed (benchmarks) makes the game, bots and nations repeat.
+    gameID: opts.seed ? "SWITCH" + opts.seed : "SWITCH" + Math.floor(host.now()).toString(36).toUpperCase(),
+    lobbyCreatedAt: 0,
+    players: [{ clientID: CLIENT_ID, username: opts.name, clanTag: null }],
+    config: configFromOptions(opts, GameType.Singleplayer),
+  } as unknown as GameStartInfo;
+  await startRunner(gameStart, CLIENT_ID, entry);
 }
 
 /** Name label status bits (the name pass's status row, in its order). */
@@ -404,8 +434,14 @@ const methods: Record<string, Handler> = {
     S.pendingIntents.push({ type: "move_warship", unitIds: a.ids, tile: g.ref(a.x, a.y) });
   },
   pause: (a) => {
-    S.paused = !!a.paused;
+    if (mpInGame()) mpPause(!!a.paused);
+    else S.paused = !!a.paused;
   },
+  mpConnect: (a) => mpConnect(a),
+  mpLeave: () => mpLeave(),
+  mpLobby: () => mpLobby(),
+  mpConfig: (a) => mpConfig(a),
+  mpStartTimer: () => mpStartTimer(),
   t: (a) => t(a.key, a.params ?? {}),
   playerInfo: (a) => {
     const p = playerBySmall(a.sid);
@@ -467,6 +503,33 @@ function structureProgress(u: Unit, ticks: number): number {
   return -1;
 }
 
+/** Clears everything a previous game left in the adapter. */
+export function setError(msg: string | null): void {
+  error = msg;
+}
+
+export function resetGame(): void {
+  S.runner = null;
+  S.pendingIntents = [];
+  S.paused = false;
+  S.ui.ghostStructure = null;
+  S.ui.attackRatio = 0.2;
+  error = null;
+  names = {};
+  iconBits = new WeakMap();
+  iconTick = -Infinity;
+  turnNumber = 0;
+  constructionStart.clear();
+  attackKeys.clear();
+  attackPositions.clear();
+  attackPosTick = -Infinity;
+  tileBatch = [];
+  resetColors();
+  resetEvents();
+  resetSounds();
+  resetHud();
+}
+
 const OF = {
   init(lang: string): void {
     initI18n(lang);
@@ -497,29 +560,28 @@ const OF = {
   },
 
   start(opts: StartOptions): void {
-    S.runner = null;
-    S.pendingIntents = [];
-    S.paused = false;
-    S.ui.ghostStructure = null;
-    S.ui.attackRatio = 0.2;
-    error = null;
-    names = {};
-    iconBits = new WeakMap();
-    iconTick = -Infinity;
-    turnNumber = 0;
-    constructionStart.clear();
-    attackKeys.clear();
-    attackPositions.clear();
-    attackPosTick = -Infinity;
-    tileBatch = [];
-    resetColors();
-    resetEvents();
-    resetSounds();
-    resetHud();
+    resetGame();
     startOptions = opts;
     start(opts).catch((e: unknown) => {
       error = e instanceof Error ? e.message + "\n" + e.stack : String(e);
       console.error("start failed:", error);
+    });
+  },
+
+  /** WebSocket events from the host (src/net.c): 0 open, 1 message, 2 close. */
+  netEvent(kind: number, data: ArrayBuffer | string, code: number): void {
+    mpNetEvent(kind, data, code);
+  },
+
+  /** Server turns waiting, or -1 when the server started the game (call mpStartGame). */
+  mpPoll(): number {
+    return mpPoll();
+  },
+
+  mpStartGame(): void {
+    mpStartGame().catch((e: unknown) => {
+      setError(e instanceof Error ? e.message + "\n" + e.stack : String(e));
+      console.error("multiplayer start failed:", e);
     });
   },
 
@@ -561,6 +623,12 @@ const OF = {
 
   tick(): boolean {
     if (S.runner === null) return false;
+    if (mpInGame()) {
+      const turn = nextTurn();
+      if (turn === null) return false;
+      S.runner.addTurn(turn);
+      return S.runner.executeNextTick();
+    }
     // Seeded benchmarks: the human spawns at a fixed turn on the land tile
     // nearest the map centre, so the whole game repeats exactly.
     if (startOptions?.seed && turnNumber === 5) {

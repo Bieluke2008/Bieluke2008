@@ -5,6 +5,26 @@ Cada versión es una etiqueta de git (`vX.Y.Z`) y, a partir de la 0.2.0, una
 workflow **OpenFront Switch release** al subir la etiqueta). El número de
 versión está en `VERSION` y se ve en la pantalla de inicio de la app.
 
+## 0.7.0
+
+- Multijugador en red local con jugadores en el navegador y otras Switch,
+  sobre el servidor de OpenFront arrancado en un PC de tu red
+  (`servidor-pc/iniciar-servidor-windows.bat` o `iniciar-servidor.sh`, que
+  descargan la versión de OpenFront que usa el port y la arrancan).
+- Portada: botón Multijugador (o X). Pantalla para escribir la IP:puerto del
+  servidor, «Crear lobby» y «Unirse al lobby» con el código.
+- Crear sala: la pantalla Solo con el código de la sala y los jugadores que
+  entran; los cambios de opciones se envían al servidor al momento, y
+  «Iniciar partida» la arranca para todos.
+- Unirse: sala de espera con el mapa, modo, dificultad, tribus y jugadores;
+  avisa si el anfitrión no activó «Mapa compacto».
+- En la partida: el ritmo lo marca el servidor (sin botón de acelerar), solo
+  el creador de la sala puede pausar, y se avisa de pausa, desconexión,
+  desincronización o «poniéndose al día».
+- La Switch simula la partida igual que la web, turno a turno: comprobado
+  contra el motor original durante 7 minutos de partida sin una sola
+  diferencia en los hashes que compara el servidor.
+
 ## 0.6.0
 
 - Pantalla de inicio como la página principal de openfront.io: fondo del

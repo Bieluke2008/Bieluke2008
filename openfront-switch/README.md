@@ -30,6 +30,14 @@ al mando.
   tiempo extra, oro y tropas infinitos, construcción instantánea) y
   **desactivar unidades**. En la partida, Menú muestra los modificadores activos como en
   la web.
+- **Multijugador en red local** contra jugadores en el navegador y otras
+  Switch: el servidor es el de OpenFront (código abierto) en un PC de tu red,
+  arrancado con `server/iniciar-servidor-windows.bat` o
+  `server/iniciar-servidor.sh`. Desde la Switch se crea una sala (con todas
+  las opciones de Solo) o se entra en una con su código; los demás entran
+  desde `http://IP-del-PC:9000` con «Unirse al lobby». La Switch habla el
+  mismo protocolo que la web (WebSocket y los mensajes binarios de
+  OpenFront) y simula la partida igual, turno a turno (ver *Cómo funciona*).
 - **Sonido** de OpenFront: efectos (construir, bombas, alertas, conquistas,
   alianzas, victoria/derrota…), sonido ambiente de las ciudades al acercarte
   y la pestaña **Audio** de la web con sus seis volúmenes. La música es
@@ -67,9 +75,10 @@ al mando.
 
 ## Qué no incluye (todavía)
 
-- **Multijugador online.** Necesitaría el protocolo de los servidores de
-  OpenFront (con su autenticación y antibots) y que la consola simule a la
-  velocidad exacta del servidor.
+- **Multijugador en openfront.io.** Sus servidores piden en cada entrada el
+  captcha de Cloudflare (Turnstile), que solo funciona dentro de su web; el
+  port no lo puede presentar sin la colaboración de OpenFront. En red local,
+  con tu propio servidor, sí (ver arriba).
 - Cosméticos/skins, vías de tren dibujadas, repeticiones,
   partidas guardadas y la pantalla completa de ajustes (el botón «Ajustes» del
   menú muestra los controles).
@@ -131,6 +140,17 @@ Menu.
 3. Abre el Homebrew Menu **manteniendo R al abrir un juego** (*title
    override*). Desde el álbum (modo applet) la app tiene mucha menos memoria
    y los mapas grandes pueden fallar.
+
+**Multijugador en red local.** En un PC de la misma red instala Git y
+Node.js 24 y abre `servidor-pc/iniciar-servidor-windows.bat` (o
+`iniciar-servidor.sh` en Linux/macOS) del zip: descarga OpenFront en la
+versión exacta que usa el port (si no coincidiera, las partidas se
+desincronizarían), instala sus dependencias y arranca `npm run dev:host`,
+que escucha en el puerto 9000 de todas las interfaces. En la Switch:
+Multijugador, escribe `IP:9000` y crea una sala o únete con su código. En el
+navegador: `http://IP:9000` y «Unirse al lobby». Las salas creadas en la web
+deben activar «Mapa compacto». El servidor en modo desarrollo no pide captcha
+ni cuentas: úsalo solo en tu red (o en una VPN como Tailscale).
 
 **Música (opcional).** La música de OpenFront no es libre (está en su
 carpeta `proprietary/`, «todos los derechos reservados»), así que no va en el
@@ -211,6 +231,16 @@ Y para probar solo el motor con Node:
   motor en `romfs/engine.js` y hablan con C por JSON.
 - `src/engine.c` ejecuta QuickJS en su propio hilo y responde a las llamadas
   del hilo de dibujado.
+- Multijugador: `src/net.c` abre el WebSocket (y las peticiones HTTP para
+  crear o encontrar la sala) con los sockets de libnx, en sus propios hilos;
+  `js/mp.ts` es la parte del `Transport` y del `ClientGameRunner` de la web
+  que habla con el servidor, con los esquemas binarios (zbin) de OpenFront:
+  `join`, la información de la sala, `start`, un turno cada 100 ms con los
+  *intents* de todos, `ping` y los *hashes* del estado cada 10 turnos, que el
+  servidor compara entre clientes para detectar desincronizaciones. El motor
+  avanza un tick por cada turno recibido. Se comprobó contra el motor original
+  en Node durante 7 minutos de partida (416 hashes iguales) y con el cliente
+  web real en la misma sala.
 - `src/gfx.c` y `src/ui.c`: formas con esquinas redondeadas, iconos,
   banderas, emojis y texto (Inter, DejaVu Sans Mono, Overpass) en
   coordenadas de una página de 1280×720 escalada a la pantalla, y botones con

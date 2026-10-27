@@ -320,8 +320,11 @@ static void left_sidebar(const cJSON *lb) {
 static void right_sidebar(const cJSON *frame) {
     const char *timer = jstr(frame, "timer", "00:00");
     float tw = gfx_text_width(FONT_400, 16, timer);
-    // timer | fast-forward | pause | settings | exit, gap-3, px-3 py-2
-    float w = 12 + tw + 12 + 20 + 12 + 20 + 12 + 20 + 12 + 20 + 12;
+    // timer | fast-forward | pause | settings | exit, gap-3, px-3 py-2. On a
+    // server there is no fast-forward, and only the lobby's creator may pause.
+    bool show[4] = {!app.multiplayer, !app.multiplayer || app.mp_host, true, true};
+    float w = 12 + tw + 12;
+    for (int i = 0; i < 4; i++) w += show[i] ? 32 : 0;
     Rect aside = {PAGE_W - w, 0, w, 40};
     gfx_shadow(aside, 8, 2, rgba(0, 0, 0, 30));
     gfx_fill_rrect4(aside, 0, 0, 0, 8, panel_bg());
@@ -339,6 +342,7 @@ static void right_sidebar(const cJSON *frame) {
         {"ExitIconWhite", 20},
     };
     for (int i = 0; i < 4; i++) {
+        if (!show[i]) continue;
         Rect r = {x, 20 - buttons[i].h / 2, 20, buttons[i].h};
         Rect hit = {x - 6, 0, 32, 40};
         if (ui_button(ui_id("sidebar", i), hit)) {
@@ -350,7 +354,7 @@ static void right_sidebar(const cJSON *frame) {
         gfx_icon(buttons[i].icon, r, hex(TW_WHITE), ICON_NORMAL);
         x += 32;
     }
-    if (app.replay_panel) {
+    if (app.replay_panel && !app.multiplayer) {
         // ReplayPanel: game speed buttons ×0.5 ×1 ×2 max.
         static const char *labels[4] = {"×0.5", "×1", "×2", "max"};
         Rect panel = {PAGE_W - 8 - 216, 48, 216, 40};

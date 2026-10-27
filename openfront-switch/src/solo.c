@@ -309,7 +309,39 @@ static void team_label(int i, char *out, size_t n) {
     else snprintf(out, n, "%d", i + 2);
 }
 
-SoloResult solo_draw(StartOptions *o, int *speed_idx, const Input *in) {
+/** The lobby's code and players (HostLobbyModal's header and player list). */
+static float lobby_header(const SoloLobby *lobby, float x0, float y, float w) {
+    Rect cr = {x0, y, w, 64};
+    gfx_box(cr, 10, hex(ITEM_BG), 1, hex(ITEM_BORDER));
+    char l[96];
+    snprintf(l, sizeof l, "%s", T("port.mp_code"));
+    gfx_upper(l);
+    gfx_text(FONT_700, 13, l, cr.x + 16, cr.y + 12, 18, hex(LABEL), ALIGN_LEFT);
+    gfx_text(FONT_400, 12, T("port.mp_code_hint"), cr.x + 16, cr.y + 34, 18, hex(0x8f8696), ALIGN_LEFT);
+    gfx_text(FONT_800, 28, lobby->code, cr.x + cr.w - 16, cr.y + 14, 34, hex(ORANGE), ALIGN_RIGHT);
+    y += 64 + 24;
+    char title[96];
+    snprintf(title, sizeof title, "%s (%d)", T("host_modal.players"), lobby->nplayers);
+    section_title(title, ICON_MODE, 0xc084fc, 0xa855f7, x0, y);
+    y += 42 + 16;
+    float cx = x0;
+    for (int i = 0; i < lobby->nplayers; i++) {
+        char name[96];
+        if (i == 0) snprintf(name, sizeof name, "%s · %s", lobby->players[i], T("host_modal.host_badge"));
+        else snprintf(name, sizeof name, "%s", lobby->players[i]);
+        float pw = gfx_text_width(FONT_600, 14, name) + 28;
+        if (cx > x0 && cx + pw > x0 + w) cx = x0, y += 40;
+        gfx_box((Rect){cx, y, pw, 32}, 8, i == 0 ? hex(SEL_BG) : hex(ITEM_BG), 1, i == 0 ? hex(ORANGE) : hex(ITEM_BORDER));
+        gfx_text(FONT_600, 14, name, cx + 14, y + 7, 18, hex(TW_WHITE), ALIGN_LEFT);
+        cx += pw + 10;
+    }
+    if (lobby->nplayers < 2) {
+        gfx_text(FONT_400, 14, T("host_modal.waiting"), cx + 6, y + 7, 18, hex(0x8f8696), ALIGN_LEFT);
+    }
+    return y + 32 + 24;
+}
+
+SoloResult solo_draw(StartOptions *o, int *speed_idx, const Input *in, const SoloLobby *lobby) {
     const MapList *ml = engine_maps();
     SoloResult result = SOLO_NONE;
     // The modal sits on the home page, as the web client's does.
@@ -326,7 +358,7 @@ SoloResult solo_draw(StartOptions *o, int *speed_idx, const Input *in) {
     gfx_text(FONT_400, 20, "←", 307, 131, 24, hex(0xa4a7b5), ALIGN_CENTER);
     if (ui_button(bid, back)) result = SOLO_QUIT;
     char title[64];
-    snprintf(title, sizeof title, "%s", T("main.solo"));
+    snprintf(title, sizeof title, "%s", lobby ? T("port.mp_lobby") : T("main.solo"));
     gfx_upper(title);
     gfx_text(FONT_800, 26, title, 343, 128, 30, hex(TW_WHITE), ALIGN_LEFT);
     gfx_fill_rect((Rect){263, 186, 754, 1}, hex(CARD_BORDER));
@@ -362,6 +394,8 @@ SoloResult solo_draw(StartOptions *o, int *speed_idx, const Input *in) {
     gfx_clip(&view);
     const float top = view.y + 16 - scroll;
     float y = top;
+    if (lobby) y = lobby_header(lobby, x0, y, w);
+    const float maps_top = y - top + 16;  // where the map section starts in the content
 
     // Map.
     section_title(T("map.map"), ICON_MAP, 0x38bdf8, 0x0084d1, x0, y);
@@ -523,24 +557,28 @@ SoloResult solo_draw(StartOptions *o, int *speed_idx, const Input *in) {
     input_card(4, (Rect){x0 + 3 * (cw + 16), y, cw, IH}, T("game_settings.overtime"), &o->overtime_on, &o->overtime, 1, 120,
                5, 30, NULL);
     y += IH + 16;
-    // The port's own: game speed.
-    static const char *speeds[4] = {"×0.5", "×1", "×2", "×4"};
-    char l[64];
-    snprintf(l, sizeof l, "%s", T("port.speed"));
-    gfx_upper(l);
-    Rect sr = {x0, y, w, 64};
-    gfx_box(sr, 10, hex(ITEM_BG), 1, hex(ITEM_BORDER));
-    gfx_text(FONT_700, 13, l, sr.x + 16, sr.y + 22, 18, hex(LABEL), ALIGN_LEFT);
-    for (int i = 0; i < 4; i++) {
-        Rect b = {sr.x + 240 + (float)i * 112, sr.y + 16, 100, 32};
-        uint32_t id = ui_id("solo-speed", i);
-        bool hover = ui_hover(id, b);
-        bool on = *speed_idx == i;
-        gfx_fill_rrect(b, 6, on ? hex(ORANGE) : hex(hover ? 0x3a2845 : 0x2a1834));
-        gfx_text(FONT_600, 14, speeds[i], b.x + b.w / 2, b.y + 6, 20, hex(TW_WHITE), ALIGN_CENTER);
-        if (ui_button(id, b)) *speed_idx = i;
+    if (!lobby) {
+        // The port's own: game speed (a server sets its own pace).
+        static const char *speeds[4] = {"×0.5", "×1", "×2", "×4"};
+        char l[64];
+        snprintf(l, sizeof l, "%s", T("port.speed"));
+        gfx_upper(l);
+        Rect sr = {x0, y, w, 64};
+        gfx_box(sr, 10, hex(ITEM_BG), 1, hex(ITEM_BORDER));
+        gfx_text(FONT_700, 13, l, sr.x + 16, sr.y + 22, 18, hex(LABEL), ALIGN_LEFT);
+        for (int i = 0; i < 4; i++) {
+            Rect b = {sr.x + 240 + (float)i * 112, sr.y + 16, 100, 32};
+            uint32_t id = ui_id("solo-speed", i);
+            bool hover = ui_hover(id, b);
+            bool on = *speed_idx == i;
+            gfx_fill_rrect(b, 6, on ? hex(ORANGE) : hex(hover ? 0x3a2845 : 0x2a1834));
+            gfx_text(FONT_600, 14, speeds[i], b.x + b.w / 2, b.y + 6, 20, hex(TW_WHITE), ALIGN_CENTER);
+            if (ui_button(id, b)) *speed_idx = i;
+        }
+        y += 64 + 24;
+    } else {
+        y += 8;
     }
-    y += 64 + 24;
 
     // Units to disable: on = enabled.
     section_title(T("game_settings.disable_units"), ICON_ENABLES, 0x2dd4bf, 0x14b8a6, x0, y);
@@ -561,7 +599,7 @@ SoloResult solo_draw(StartOptions *o, int *speed_idx, const Input *in) {
     bool sh = ui_hover(sid, start);
     gfx_fill_rrect(start, 10, hex(sh ? 0xcc5200 : START_BG));
     char st[64];
-    snprintf(st, sizeof st, "%s", T("game_settings.start"));
+    snprintf(st, sizeof st, "%s", lobby && lobby->starting ? T("game_starting_modal.title") : T("game_settings.start"));
     gfx_upper(st);
     gfx_text(FONT_700, 20, st, PAGE_W / 2.0f, 565, 28, hex(TW_WHITE), ALIGN_CENTER);
     if (ui_button(sid, start)) result = SOLO_START;
@@ -571,7 +609,7 @@ SoloResult solo_draw(StartOptions *o, int *speed_idx, const Input *in) {
     if (ml->nmaps && (in->pressed[BTN_L] || in->pressed[BTN_R])) {
         o->map = (o->map + (in->pressed[BTN_R] ? 1 : ml->nmaps - 1)) % ml->nmaps;
         o->nations = -1;
-        float target = 16 + 42 + 16 + ry[o->map];
+        float target = maps_top + 42 + 16 + ry[o->map];
         if (target < scroll || target + ch > scroll + view.h) scroll = target - 16;
     }
     return result;

@@ -24,7 +24,7 @@ find_package(ZLIB REQUIRED)
 
 add_executable(openfront
   src/main.c src/engine.c src/input.c src/gfx.c src/ui.c src/hud.c src/map.c
-  src/radial.c src/menus.c src/solo.c src/native.c src/clocks.c src/sound.c src/settings.c src/audio_panel.c src/home.c deps/cjson/cJSON.c)
+  src/radial.c src/menus.c src/solo.c src/native.c src/clocks.c src/sound.c src/settings.c src/audio_panel.c src/home.c src/net.c src/multi.c deps/cjson/cJSON.c)
 # DetMath's exp/log in native.c must round like the TS: no fused multiply-add.
 set_source_files_properties(src/native.c PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
 target_include_directories(openfront PRIVATE src deps/cjson)

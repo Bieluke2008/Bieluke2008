@@ -90,6 +90,7 @@ typedef struct {
 
 typedef struct {
     GameStatus status;
+    bool multiplayer;        // a game on a server: its turns set the pace, no speed control
     char error[256];
     int width, height;
     const uint8_t *terrain;  // engine-owned, width*height

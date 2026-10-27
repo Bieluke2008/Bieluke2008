@@ -23,6 +23,8 @@
 #include "json.h"
 #include "map.h"
 #include "menus.h"
+#include "multi.h"
+#include "net.h"
 #include "radial.h"
 #include "settings.h"
 #include "solo.h"
@@ -74,6 +76,13 @@ static const char *const STRINGS[] = {
     "user_setting.audio_interface_desc", "user_setting.audio_test", "user_setting.audio_reset", "port.music_missing", "port.home_hint",
     "port.title", "port.name", "port.speed", "port.loading", "port.controls", "port.controls_title", "port.quit",
     "port.default", "port.credits",
+    // Multiplayer
+    "port.multiplayer", "port.multiplayer_short", "port.mp_server", "port.mp_help", "port.mp_connecting",
+    "port.mp_closed", "port.mp_need_compact", "port.mp_no_server", "port.mp_no_network", "port.mp_bad_address",
+    "port.mp_code", "port.mp_code_hint", "port.mp_lobby", "port.mp_leave", "main.create", "main.join",
+    "private_lobby.enter_id", "private_lobby.error", "private_lobby.not_found", "private_lobby.title",
+    "private_lobby.joined_waiting", "host_modal.players", "host_modal.host_badge", "host_modal.waiting",
+    "game_starting_modal.title",
     NULL,
 };
 
@@ -82,7 +91,7 @@ App app;
 static struct {
     SDL_Renderer *ren;
     const char *romfs;
-    enum { SCREEN_HOME, SCREEN_SOLO, SCREEN_GAME } screen;
+    enum { SCREEN_HOME, SCREEN_SOLO, SCREEN_MULTI, SCREEN_GAME } screen;
     bool home_audio;  // the Audio panel over the home page
     Input in;
     bool quit;
@@ -221,9 +230,8 @@ static void take_snapshot(void) {
 
 // --- Starting and leaving games ---------------------------------------------------------------
 
-static void start_game(void) {
-    engine_set_speed(SPEEDS[app.speed_idx]);
-    engine_set_paused(false);
+/** Switches to the game screen for the game the engine is starting. */
+static void enter_game(bool multiplayer) {
     map_reset();
     menus_reset();
     radial_close();
@@ -231,8 +239,8 @@ static void start_game(void) {
     G.frame_json = NULL;
     app.frame = NULL;
     G.frame_version = -1;
-    engine_start(&G.opts);
     G.screen = SCREEN_GAME;
+    app.multiplayer = multiplayer;
     app.cam_ready = false;
     app.paused = false;
     app.modal = MODAL_NONE;
@@ -247,12 +255,24 @@ static void start_game(void) {
     app.cursor_y = PAGE_H / 2.0f;
 }
 
+static void start_game(void) {
+    engine_set_speed(SPEEDS[app.speed_idx]);
+    engine_set_paused(false);
+    engine_start(&G.opts);
+    enter_game(false);
+}
+
 static void leave_game(void) {
     engine_stop();
     map_reset();
     menus_reset();
     radial_close();
     G.screen = SCREEN_HOME;
+    if (app.multiplayer) {
+        multi_game_over();
+        G.screen = SCREEN_MULTI;
+    }
+    app.multiplayer = false;
 }
 
 // --- Input ----------------------------------------------------------------------------------------
@@ -707,7 +727,24 @@ static void autoplay(int frame) {
         G.screen = SCREEN_SOLO;
         return;
     }
-    if (frame == 2) {
+    if (test.scene && !strcmp(test.scene, "multi")) {
+        if (frame == 2) multi_open(), G.screen = SCREEN_MULTI;
+        return;
+    }
+    // OPENFRONT_MP_SERVER=ip:port: host a lobby there (started once
+    // OPENFRONT_MP_PLAYERS have joined), or join OPENFRONT_MP_JOIN, and play it.
+    const char *mp_server = getenv("OPENFRONT_MP_SERVER");
+    if (frame == 2 && mp_server) {
+        const MapList *ml = engine_maps();
+        for (int i = 0; i < ml->nmaps; i++) {
+            if (strcmp(ml->map_folders[i], test.map) == 0) G.opts.map = i;
+        }
+        if (getenv("OPENFRONT_BOTS")) G.opts.bots = atoi(getenv("OPENFRONT_BOTS"));
+        G.screen = SCREEN_MULTI;
+        const char *players = getenv("OPENFRONT_MP_PLAYERS");
+        multi_auto(mp_server, getenv("OPENFRONT_MP_JOIN"), players ? atoi(players) : 1);
+    }
+    if (frame == 2 && !mp_server) {
         const MapList *ml = engine_maps();
         for (int i = 0; i < ml->nmaps; i++) {
             if (strcmp(ml->map_folders[i], test.map) == 0) G.opts.map = i;
@@ -907,7 +944,7 @@ int main(int argc, char **argv) {
             take_snapshot();
             autoplay(frame);
         }
-        if (G.screen == SCREEN_HOME || G.screen == SCREEN_SOLO) {
+        if (G.screen == SCREEN_HOME || G.screen == SCREEN_SOLO || G.screen == SCREEN_MULTI) {
             Pointer p = make_pointer(&G.in);
             if (G.in.held[BTN_A]) a_was_held = true;
             else if (a_was_held) a_was_held = false, p.released = true;
@@ -919,12 +956,20 @@ int main(int argc, char **argv) {
                 HomeResult h = home_draw(&G.opts, &in);
                 if (!overlay) {
                     if (h == HOME_SOLO) G.screen = SCREEN_SOLO;
+                    if (h == HOME_MULTI) multi_open(), G.screen = SCREEN_MULTI;
                     if (h == HOME_AUDIO) G.home_audio = true;
                     if (h == HOME_CONTROLS) app.help_visible = true;
                     if (h == HOME_QUIT || G.in.pressed[BTN_MINUS]) G.quit = true;
                 }
+            } else if (G.screen == SCREEN_MULTI) {
+                MultiResult r = multi_draw(&G.opts, &in);
+                if (r == MULTI_BACK) G.screen = SCREEN_HOME;
+                if (r == MULTI_GAME) {
+                    app.mp_host = multi_is_host();
+                    enter_game(true);
+                }
             } else {
-                SoloResult r = solo_draw(&G.opts, &app.speed_idx, &in);
+                SoloResult r = solo_draw(&G.opts, &app.speed_idx, &in, NULL);
                 if (!overlay) {
                     if (r == SOLO_START) start_game();
                     if (r == SOLO_QUIT || G.in.pressed[BTN_B]) G.screen = SCREEN_HOME;
@@ -949,6 +994,8 @@ int main(int argc, char **argv) {
     }
 
     engine_shutdown();
+    ws_close();
+    net_shutdown();
     sound_shutdown();
     settings_save();
     input_shutdown();

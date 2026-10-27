@@ -6,7 +6,11 @@ import { Intent } from "@openfront/engine-api/Schemas";
 import { GameRunner } from "@openfront/engine/GameRunner";
 import { Game, Player, Unit } from "@openfront/engine/game/Game";
 
-export const CLIENT_ID = "SWITCH01";
+/** The local player's client id: fixed in solo games, the server's in multiplayer. */
+export let CLIENT_ID = "SWITCH01";
+export function setClientID(id: string): void {
+  CLIENT_ID = id;
+}
 
 export const S = {
   runner: null as GameRunner | null,

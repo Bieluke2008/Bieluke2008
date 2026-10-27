@@ -1,6 +1,7 @@
 #include "engine.h"
 #include "clocks.h"
 #include "native.h"
+#include "net.h"
 
 #include <SDL.h>
 #include <stdio.h>
@@ -65,6 +66,7 @@ static JSContext *ctx;
 static JSValue of_obj;
 static JSValue game_buffers[3];  // terrain, state, colors: kept alive while in use
 static bool running;
+static bool mp_active;  // a multiplayer lobby or game: ticks follow the server's turns
 
 // --- Host functions -------------------------------------------------------------
 
@@ -151,6 +153,33 @@ static JSValue js_read_file(JSContext *c, JSValueConst this_val, int argc, JSVal
 }
 
 // --- JS helpers -----------------------------------------------------------------
+
+static JSValue js_ws_open(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    if (argc < 3) return JS_UNDEFINED;
+    const char *h = JS_ToCString(c, argv[0]);
+    const char *path = JS_ToCString(c, argv[2]);
+    int32_t port = 0;
+    JS_ToInt32(c, &port, argv[1]);
+    if (h && path) ws_open(h, port, path);
+    JS_FreeCString(c, h);
+    JS_FreeCString(c, path);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_ws_send(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    size_t len = 0;
+    uint8_t *data = argc > 0 ? JS_GetArrayBuffer(c, &len, argv[0]) : NULL;
+    if (data) ws_send(data, len);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_ws_close(JSContext *c, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)c, (void)this_val, (void)argc, (void)argv;
+    ws_close();
+    return JS_UNDEFINED;
+}
 
 static void set_error(const char *msg) {
     SDL_LockMutex(snap_lock);
@@ -614,7 +643,8 @@ static void refresh_snapshot(double tick_ms) {
     JS_FreeValue(ctx, frame);
 }
 
-static void do_start(const StartOptions *o) {
+/** Clears the snapshot and drops the old game before a new one is created. */
+static void begin_start(void) {
     SDL_LockMutex(snap_lock);
     snap.status = GAME_LOADING;
     snap.error[0] = 0;
@@ -627,7 +657,36 @@ static void do_start(const StartOptions *o) {
     SDL_UnlockMutex(snap_lock);
     // Only now that the render thread can no longer see them.
     release_game();
+}
 
+/** After OF.start / OF.mpStartGame: shows the new game, or its error. */
+static void finish_start(void) {
+    JSValue ok = call("ready", 0, NULL);
+    bool ready = JS_ToBool(ctx, ok);
+    JS_FreeValue(ctx, ok);
+    if (ready) {
+        attach_game();
+        refresh_relations();
+        refresh_snapshot(0);
+        running = true;
+    } else {
+        JSValue err = call("error", 0, NULL);
+        char msg[256];
+        to_buf(err, msg, sizeof msg);
+        JS_FreeValue(ctx, err);
+        SDL_LockMutex(snap_lock);
+        snap.status = GAME_FAILED;
+        snprintf(snap.error, sizeof snap.error, "%s", msg);
+        SDL_UnlockMutex(snap_lock);
+        running = false;
+    }
+}
+
+static void do_start(const StartOptions *o) {
+    begin_start();
+    SDL_LockMutex(snap_lock);
+    snap.multiplayer = false;
+    SDL_UnlockMutex(snap_lock);
     JSValue opts = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, opts, "map", JS_NewInt32(ctx, o->map));
     JS_SetPropertyStr(ctx, opts, "difficulty", JS_NewInt32(ctx, o->difficulty));
@@ -650,29 +709,15 @@ static void do_start(const StartOptions *o) {
     JS_SetPropertyStr(ctx, opts, "disabledUnits", JS_NewInt32(ctx, (int32_t)o->disabled_units));
     if (getenv("OPENFRONT_SEED")) JS_SetPropertyStr(ctx, opts, "seed", JS_NewString(ctx, getenv("OPENFRONT_SEED")));
     call_void("start", 1, &opts);
-    JSValue ok = call("ready", 0, NULL);
-    bool ready = JS_ToBool(ctx, ok);
-    JS_FreeValue(ctx, ok);
-    if (ready) {
-        attach_game();
-        refresh_relations();
-        refresh_snapshot(0);
-        running = true;
-    } else {
-        JSValue err = call("error", 0, NULL);
-        char msg[256];
-        to_buf(err, msg, sizeof msg);
-        JS_FreeValue(ctx, err);
-        SDL_LockMutex(snap_lock);
-        snap.status = GAME_FAILED;
-        snprintf(snap.error, sizeof snap.error, "%s", msg);
-        SDL_UnlockMutex(snap_lock);
-        running = false;
-    }
+    finish_start();
 }
 
 static void do_stop(void) {
     running = false;
+    if (mp_active) {
+        free(rpc("mpLeave", "{}"));
+        mp_active = false;
+    }
     SDL_LockMutex(snap_lock);
     snap.status = GAME_IDLE;
     snap.terrain = NULL;
@@ -706,8 +751,13 @@ static bool load_engine(void) {
     JS_SetPropertyStr(ctx, host, "log", JS_NewCFunction(ctx, js_log, "log", 1));
     JS_SetPropertyStr(ctx, host, "now", JS_NewCFunction(ctx, js_now, "now", 0));
     JS_SetPropertyStr(ctx, host, "readFile", JS_NewCFunction(ctx, js_read_file, "readFile", 1));
+    JS_SetPropertyStr(ctx, host, "wsOpen", JS_NewCFunction(ctx, js_ws_open, "wsOpen", 3));
+    JS_SetPropertyStr(ctx, host, "wsSend", JS_NewCFunction(ctx, js_ws_send, "wsSend", 1));
+    JS_SetPropertyStr(ctx, host, "wsClose", JS_NewCFunction(ctx, js_ws_close, "wsClose", 0));
     JS_SetPropertyStr(ctx, global, "host", host);
     JS_SetPropertyStr(ctx, global, "ROMFS_ROOT", JS_NewString(ctx, romfs_root));
+    // Tests: print the state hashes a multiplayer game reports to the server.
+    if (getenv("OPENFRONT_MP_HASHLOG")) JS_SetPropertyStr(ctx, global, "MP_HASHLOG", JS_TRUE);
     for (int i = 0; i < 3; i++) game_buffers[i] = JS_UNDEFINED;
 
     char path[512];
@@ -804,7 +854,11 @@ static int engine_main(void *unused) {
         if (do_x) do_stop();
         if (do_s) do_start(&opts);
         for (int i = 0; i < n; i++) {
-            if (running) {
+            // The multiplayer lobby calls work with no game running.
+            bool mp_call = !strncmp(local[i].method, "mp", 2);
+            if (!strcmp(local[i].method, "mpConnect")) mp_active = true;
+            if (!strcmp(local[i].method, "mpLeave")) mp_active = false;
+            if (running || mp_call) {
                 char *json = rpc(local[i].method, local[i].args);
                 if (local[i].id) store_result(local[i].id, json);
                 else free(json);
@@ -814,8 +868,48 @@ static int engine_main(void *unused) {
             free(local[i].args);
         }
 
+        // Multiplayer: hand the socket's events to the adapter, start the game
+        // when the server says so, then tick once per server turn.
+        int mp_turns = 0;
+        if (mp_active) {
+            WsEvent ev;
+            while (ws_poll(&ev)) {
+                JSValue args[3];
+                args[0] = JS_NewInt32(ctx, ev.kind == WS_EV_OPEN ? 0 : ev.kind == WS_EV_MESSAGE ? 1 : 2);
+                if (ev.kind == WS_EV_MESSAGE)
+                    args[1] = JS_NewArrayBufferCopy(ctx, ev.data, ev.len);
+                else
+                    args[1] = JS_NewString(ctx, ev.data ? (const char *)ev.data : "");
+                args[2] = JS_NewInt32(ctx, ev.code);
+                call_void("netEvent", 3, args);
+                free(ev.data);
+            }
+            JSValue v = call("mpPoll", 0, NULL);
+            JS_ToInt32(ctx, &mp_turns, v);
+            JS_FreeValue(ctx, v);
+            if (mp_turns < 0) {
+                begin_start();
+                call_void("mpStartGame", 0, NULL);
+                finish_start();
+                SDL_LockMutex(snap_lock);
+                snap.multiplayer = true;
+                SDL_UnlockMutex(snap_lock);
+                mp_turns = 0;
+            }
+        }
+
         double now = now_ms();
-        if (running && !p && now >= next_tick) {
+        if (running && mp_active && mp_turns > 0) {
+            // The server paces the game; a backlog (joining late, a slow
+            // tick) is worked off at once, refreshing the view every few ticks.
+            double t0 = now_ms();
+            JS_FreeValue(ctx, call("tick", 0, NULL));
+            double dt = now_ms() - t0;
+            static int behind;
+            if (mp_turns <= 2 || ++behind % 8 == 0) refresh_snapshot(dt);
+            continue;
+        }
+        if (running && !mp_active && !p && now >= next_tick) {
             double t0 = now_ms();
             JS_FreeValue(ctx, call("tick", 0, NULL));
             double dt = now_ms() - t0;
@@ -848,7 +942,7 @@ static int engine_main(void *unused) {
 
         SDL_LockMutex(cmd_lock);
         if (ncalls == 0 && !quit && !start_requested && !stop_requested) {
-            double wait = running && !p ? next_tick - now_ms() : 50;
+            double wait = mp_active ? 5 : running && !p ? next_tick - now_ms() : 50;
             if (wait > 0) SDL_CondWaitTimeout(cmd_cond, cmd_lock, (Uint32)wait + 1);
         }
         SDL_UnlockMutex(cmd_lock);

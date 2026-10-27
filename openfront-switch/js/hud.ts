@@ -14,6 +14,7 @@ import { GameUpdateType, GameUpdateViewData } from "@openfront/engine-api/game/G
 import { renderNumber, renderTroops } from "@openfront/engine-lib/Format";
 import { Player } from "@openfront/engine/game/Game";
 import { eventsModel, sounds } from "./events";
+import { mpActive, mpHeadsUp, mpInGame } from "./mp";
 import { t } from "./i18n";
 import {
   attackingTroops,
@@ -341,6 +342,10 @@ function timer(): string {
 
 function headsUp(): string | null {
   const g = game();
+  if (mpInGame() || mpActive()) {
+    const m = mpHeadsUp(g.isPaused());
+    if (m !== null) return m;
+  }
   if (S.paused) return t("heads_up_message.singleplayer_game_paused");
   if (g.inSpawnPhase()) {
     return g.config().isRandomSpawn()

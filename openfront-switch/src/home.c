@@ -79,8 +79,7 @@ static void edit_name(StartOptions *o) {
 #endif
 }
 
-/** renderSmallActionCard: a rounded, uppercase action button. */
-static bool action(const char *id, Rect r, const char *label, bool primary, float px) {
+bool home_button(const char *id, Rect r, const char *label, bool primary, float px) {
     uint32_t uid = ui_id(id, 0);
     bool hover = ui_hover(uid, r);
     Rect d = r;
@@ -120,13 +119,17 @@ HomeResult home_draw(StartOptions *o, const Input *in) {
     if (ui_button(nid, nr) || in->pressed[BTN_Y]) edit_name(o);
 
     // Solo (the web's primary action), then the port's own.
-    if (action("home-solo", (Rect){X, 388, W, 84}, T("main.solo"), true, 26) || in->pressed[BTN_PLUS])
+    float hw = (W - 16) / 2;
+    if (home_button("home-solo", (Rect){X, 388, hw, 84}, T("main.solo"), true, 26) || in->pressed[BTN_PLUS])
         result = HOME_SOLO;
+    if (home_button("home-multi", (Rect){X + hw + 16, 388, hw, 84}, T("port.multiplayer_short"), true, 22) ||
+        in->pressed[BTN_X])
+        result = HOME_MULTI;
     float bw = (W - 32) / 3;
-    if (action("home-audio", (Rect){X, 488, bw, 56}, T("user_setting.tab_audio"), false, 16)) result = HOME_AUDIO;
-    if (action("home-controls", (Rect){X + bw + 16, 488, bw, 56}, T("port.controls_title"), false, 16))
+    if (home_button("home-audio", (Rect){X, 488, bw, 56}, T("user_setting.tab_audio"), false, 16)) result = HOME_AUDIO;
+    if (home_button("home-controls", (Rect){X + bw + 16, 488, bw, 56}, T("port.controls_title"), false, 16))
         result = HOME_CONTROLS;
-    if (action("home-quit", (Rect){X + 2 * (bw + 16), 488, bw, 56}, T("port.quit"), false, 16)) result = HOME_QUIT;
+    if (home_button("home-quit", (Rect){X + 2 * (bw + 16), 488, bw, 56}, T("port.quit"), false, 16)) result = HOME_QUIT;
 
     // Controller hints.
     gfx_text(FONT_400, 13, T("port.home_hint"), PAGE_W / 2.0f, 566, 18, hex(0x8f8696), ALIGN_CENTER);

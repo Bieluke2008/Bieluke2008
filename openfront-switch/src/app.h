@@ -44,6 +44,8 @@ typedef struct {
     bool quit_to_menu;
     bool alt_view;             // "Toggle Terrain" in the in-game menu
     bool help_visible;         // the controls help overlay
+    bool multiplayer;          // a game on a server: no speed control
+    bool mp_host;              // ...that this console created (it may pause)
 } App;
 
 extern App app;

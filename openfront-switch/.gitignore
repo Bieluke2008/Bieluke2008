@@ -6,3 +6,5 @@ romfs/
 *.elf
 tools/node_modules/
 dist/
+server/OpenFrontIO/
+openfront-settings.ini
